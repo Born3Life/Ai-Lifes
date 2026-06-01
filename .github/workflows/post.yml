@@ -1,9 +1,9 @@
 name: Post to TG and VK
 on:
   schedule:
-    - cron: "0 6 * * *"
-    - cron: "0 11 * * *"
-    - cron: "0 17 * * *"
+    - cron: "0 5 * * *"
+    - cron: "0 10 * * *"
+    - cron: "0 16 * * *"
   workflow_dispatch:
 
 jobs:

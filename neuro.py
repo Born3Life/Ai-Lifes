@@ -132,7 +132,7 @@ def vk_publish(text):
 
 
 def _now_hour():
-    return datetime.utcnow().hour + 3
+    return datetime.utcnow().hour + 4
 
 
 def _slot_by_hour(hour):
