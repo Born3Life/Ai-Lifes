@@ -81,10 +81,10 @@ def generate(slot):
     prompt = PROMPTS[slot]
     key = os.environ.get("NG_GEMINI_KEY") or _env("NG_GEMINI_KEY")
     if key:
-        for model in ["gemini-2.5-flash", "gemini-2.0-flash"]:
+        for model in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-001"]:
             for _ in range(3):
                 url = ("https://generativelanguage.googleapis.com/v1beta/"
-                       "models/{}/generateContent?key={}").format(model, key)
+                       "models/{}:generateContent?key={}").format(model, key)
                 payload = {"contents": [{"parts": [{"text": prompt}]}],
                            "generationConfig": {"maxOutputTokens": 500, "temperature": 0.8}}
                 data = _post(url, payload, {"Content-Type": "application/json"}, timeout=60)
