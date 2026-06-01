@@ -26,6 +26,4 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Debug Gemini API
-        run: python _debug_api.py
       - run: python neuro.py --once ${{ inputs.slot || '' }}
