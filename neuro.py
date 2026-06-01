@@ -106,8 +106,7 @@ def tg_publish(text):
     channel = os.environ.get("NG_TG_CHANNEL") or _env("NG_TG_CHANNEL", "@Ai_Lifes")
     data = _post(
         "https://api.telegram.org/bot{}/sendMessage".format(token),
-        {"chat_id": channel, "text": text, "parse_mode": "HTML",
-         "disable_web_page_preview": False}, timeout=30)
+        {"chat_id": channel, "text": text}, timeout=30)
     if data and data.get("ok"):
         log.info("TG OK"); return True
     log.error("TG fail"); return False
