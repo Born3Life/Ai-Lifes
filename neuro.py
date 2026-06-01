@@ -142,12 +142,13 @@ def _slot_by_hour(hour):
     return None
 
 
-def run_once():
-    hour = _now_hour()
-    slot = _slot_by_hour(hour)
+def run_once(slot=None):
     if not slot:
-        log.info("no post scheduled at hour %d", hour)
-        return
+        hour = _now_hour()
+        slot = _slot_by_hour(hour)
+    if not slot:
+        log.info("no slot for hour %d, defaulting to morning", _now_hour())
+        slot = "morning"
     text = generate(slot)
     if text:
         tg_publish(text)
@@ -159,7 +160,9 @@ def run_once():
 
 def main():
     if "--once" in sys.argv:
-        run_once()
+        i = sys.argv.index("--once")
+        slot = sys.argv[i + 1] if i + 1 < len(sys.argv) and not sys.argv[i + 1].startswith("-") else None
+        run_once(slot)
         return
     log.info("neuro-guide started (scheduler mode)")
     while True:
