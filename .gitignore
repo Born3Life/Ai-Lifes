@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.env
+state.json
+_debug.py
+_test_hf.py
+test_post.py
+run.sh

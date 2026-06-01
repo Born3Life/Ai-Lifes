@@ -1,0 +1,12 @@
+[project]
+name = "neuro-guide"
+version = "0.1.0"
+description = "AI-контент для TG и VK — утро, день, вечер"
+requires-python = ">=3.11"
+dependencies = [
+    "python-dotenv>=1.1",
+    "requests>=2.34.2",
+]
+
+[project.scripts]
+neuro-guide = "scheduler:main"
