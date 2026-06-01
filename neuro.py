@@ -92,7 +92,9 @@ def generate(slot):
                     time.sleep(10)
                     continue
                 try:
-                    return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                    text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                    log.info("Generated %d chars: %s", len(text), repr(text[:80]))
+                    return text
                 except (KeyError, IndexError):
                     break
     log.error("no provider")
@@ -106,7 +108,8 @@ def tg_publish(text):
     channel = os.environ.get("NG_TG_CHANNEL") or _env("NG_TG_CHANNEL", "@Ai_Lifes")
     data = _post(
         "https://api.telegram.org/bot{}/sendMessage".format(token),
-        {"chat_id": channel, "text": text}, timeout=30)
+        {"chat_id": channel, "text": text},
+        {"Content-Type": "application/json"}, timeout=30)
     if data and data.get("ok"):
         log.info("TG OK"); return True
     log.error("TG fail"); return False
