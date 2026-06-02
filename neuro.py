@@ -66,9 +66,8 @@ FORMAT = (
     "6. В конце — пустая строка, затем призыв подписаться (строка с эмодзи).\n"
     "7. НЕ используй хештеги. НЕ обращайся к читателю напрямую "
     "('вы', 'друзья', 'ребята'). Используй безличные конструкции.\n"
-    "8. Длина: 500-1000 символов. Закончи мысль, не обрывай.\n"
-    "9. В самом конце поста добавь строку ---IMAGE: (короткое описание "
-    "для генерации картинки, связанной с постом, до 60 символов, на английском)"
+    "8. Длина: 500-1000 символов, но если темы требует больше — пиши больше. "
+    "Главное — закончи мысль, не обрывай."
 )
 
 PROMPTS = {
@@ -146,24 +145,17 @@ def generate(slot):
                 url = ("https://generativelanguage.googleapis.com/v1beta/"
                        "models/{}:generateContent?key={}").format(model, key)
                 payload = {"contents": [{"parts": [{"text": prompt}]}],
-                           "generationConfig": {"maxOutputTokens": 2048, "temperature": 0.85}}
+                           "generationConfig": {"maxOutputTokens": 2048, "temperature": 0.9}}
                 data = _post(url, payload, {"Content-Type": "application/json"}, timeout=30)
                 if data is None:
                     time.sleep(10)
                     continue
                 try:
                     raw = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-                    post_text = raw
-                    img_prompt = None
-                    if "---IMAGE:" in raw:
-                        parts = raw.rsplit("---IMAGE:", 1)
-                        post_text = parts[0].strip()
-                        img_prompt = parts[1].strip().split("\n")[0].strip()
-                    if not img_prompt:
-                        first_line = post_text.split("\n")[0].strip()
-                        img_prompt = "AI neural network technology, " + first_line[:40]
-                    log.info("Generated %d chars, img: %s", len(post_text), img_prompt)
-                    return post_text, img_prompt
+                    first_line = raw.split("\n")[0].strip()
+                    img_prompt = "AI technology " + first_line[:50]
+                    log.info("Generated %d chars, img: %s", len(raw), img_prompt)
+                    return raw, img_prompt
                 except (KeyError, IndexError):
                     break
     log.error("no provider")
@@ -175,52 +167,31 @@ def _generate_image(prompt):
         return None
     url = "https://image.pollinations.ai/prompt/" + urllib.parse.quote(prompt) + "?width=1024&height=768"
     log.info("img url: %s", url)
+    return url
+
+
+def _download(url):
     try:
-        with urllib.request.urlopen(url, timeout=30, context=CTX) as r:
-            data = r.read()
-            ct = r.headers.get("Content-Type", "")
-            log.info("img response: %d bytes, type=%s", len(data), ct)
-            if "html" in ct or len(data) < 100:
-                log.warning("img not an image: %s", data[:200])
-                return None
-            return data
+        with urllib.request.urlopen(url, timeout=20, context=CTX) as r:
+            return r.read()
     except Exception as e:
-        log.warning("img gen http fail: %s", e)
+        log.warning("download fail: %s", e)
     return None
 
 
-def tg_publish(text, image_data=None):
+def tg_publish(text, image_url=None):
     token = os.environ.get("NG_TG_TOKEN") or _env("NG_TG_TOKEN")
     if not token:
         log.error("no TG token"); return False
     channel = os.environ.get("NG_TG_CHANNEL") or _env("NG_TG_CHANNEL", "@Ai_Lifes")
-    if image_data:
-        boundary = "----boundary123"
-        def _part(name, val, is_file=False):
-            h = 'Content-Disposition: form-data; name="{}"'.format(name)
-            if is_file:
-                h += '; filename="img.jpg"'
-            ct = "\r\nContent-Type: image/jpeg" if is_file else "\r\nContent-Type: text/plain; charset=utf-8"
-            return (h + ct + "\r\n\r\n").encode("utf-8") + val
-        def _e(s):
-            return s.encode("utf-8") if isinstance(s, str) else s
-        body = b""
-        for name, val in [("chat_id", _e(channel)), ("caption", _e(text))]:
-            body += ("--" + boundary + "\r\n").encode() + _part(name, val)
-        body += ("--" + boundary + "\r\n").encode() + _part("photo", image_data, is_file=True)
-        body += ("\r\n--" + boundary + "--\r\n").encode()
-        req = urllib.request.Request(
+    if image_url:
+        data = _post(
             "https://api.telegram.org/bot{}/sendPhoto".format(token),
-            data=body,
-            headers={"Content-Type": "multipart/form-data; boundary=" + boundary},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=60, context=CTX) as r:
-                if json.loads(r.read().decode()).get("ok"):
-                    log.info("TG photo OK"); return True
-        except Exception as e:
-            log.warning("TG photo fail: %s", e)
+            {"chat_id": channel, "photo": image_url, "caption": text},
+            {"Content-Type": "application/json"}, timeout=60)
+        if data and data.get("ok"):
+            log.info("TG photo OK"); return True
+        log.warning("TG photo fail: %s", data)
     data = _post(
         "https://api.telegram.org/bot{}/sendMessage".format(token),
         {"chat_id": channel, "text": text},
@@ -267,17 +238,19 @@ def _vk_upload_image(group, image_data):
     return None
 
 
-def vk_publish(text, image_data=None):
+def vk_publish(text, image_url=None):
     token = os.environ.get("NG_VK_TOKEN") or _env("NG_VK_TOKEN")
     group = os.environ.get("NG_VK_GROUP") or _env("NG_VK_GROUP")
     if not token or not group:
         log.error("no VK"); return False
     owner = -abs(int(group))
     attach = []
-    if image_data:
-        att = _vk_upload_image(group, image_data)
-        if att:
-            attach.append(att)
+    if image_url:
+        img_data = _download(image_url)
+        if img_data:
+            att = _vk_upload_image(group, img_data)
+            if att:
+                attach.append(att)
     params = {"owner_id": owner, "message": text,
               "access_token": token, "v": "5.199"}
     if attach:
@@ -327,8 +300,8 @@ def _history_context():
     h = _load_history()
     if not h:
         return ""
-    return "\n\nРанее ты уже писал эти посты (НЕ повторяй их темы, формулировки и мысли):\n" + "\n".join(
-        f"— {p.split(chr(10))[0][:80]}" for p in h[-10:]
+    return "\n\nВАЖНО: не повторяй темы этих предыдущих постов:\n" + "\n".join(
+        f"— {p.split(chr(10))[0][:60]}" for p in h[-10:]
     )
 
 
@@ -338,11 +311,11 @@ def run_once(slot=None):
         slot = _slot_by_hour(hour)
     log.info("slot: %s (hour %d)", slot, _now_hour())
     text, img_prompt = generate(slot)
-    img = _generate_image(img_prompt) if img_prompt else None
+    img_url = _generate_image(img_prompt) if img_prompt else None
     if text:
         _save_history(text)
-        tg_publish(text, img)
-        vk_publish(text, img)
+        tg_publish(text, img_url)
+        vk_publish(text, img_url)
         log.info("%s done", slot)
     else:
         log.error("%s failed", slot)
@@ -362,10 +335,10 @@ def main():
         for slot, h in SCHEDULE.items():
             if hour == h and not state.get(today, {}).get(slot):
                 text, img_prompt = generate(slot)
-                img = _generate_image(img_prompt) if img_prompt else None
+                img_url = _generate_image(img_prompt) if img_prompt else None
                 if text:
-                    tg_publish(text, img)
-                    vk_publish(text, img)
+                    tg_publish(text, img_url)
+                    vk_publish(text, img_url)
                     state.setdefault(today, {})[slot] = True
                     STATE.write_text(json.dumps(state, ensure_ascii=False, indent=2),
                                      encoding="utf-8")
