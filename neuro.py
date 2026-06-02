@@ -75,7 +75,11 @@ def _multipart_post(url, fields, file_field, file_data, filename="img.jpg", time
         method="POST")
     try:
         with urllib.request.urlopen(req, timeout=timeout, context=CTX) as r:
-            return json.loads(r.read().decode())
+            resp = json.loads(r.read().decode())
+            log.info("multipart OK: %s", str(resp.get("ok")))
+            return resp
+    except urllib.error.HTTPError as e:
+        log.warning("multipart HTTP %d: %s", e.code, e.read().decode()[:200])
     except Exception as e:
         log.warning("multipart fail: %s", e)
     return None
@@ -186,22 +190,26 @@ def generate(channel, slot="default"):
 
 def _make_image(prompt):
     url = "https://image.pollinations.ai/prompt/" + urllib.parse.quote(prompt) + "?width=1024&height=768"
-    log.info("img url: %s", url)
+    log.info("fetching img: %s", url)
     try:
-        with urllib.request.urlopen(url, timeout=20, context=CTX) as r:
-            return r.read()
+        with urllib.request.urlopen(url, timeout=25, context=CTX) as r:
+            data = r.read()
+            log.info("img fetched: %d bytes, ct=%s", len(data), r.headers.get("Content-Type"))
+            return data
     except Exception as e:
         log.warning("img fetch fail: %s", e)
     return None
 
 
 def _overlay_text(image_data, text):
+    log.info("overlay: %d bytes, text=%s", len(image_data), text[:40])
     try:
         img = Image.open(io.BytesIO(image_data)).convert("RGB")
     except Exception as e:
         log.warning("pillow open fail: %s", e)
         return image_data
     W, H = img.size
+    log.info("image size: %dx%d", W, H)
     bar_h = int(H * 0.28)
     draw = ImageDraw.Draw(img)
     overlay = Image.new("RGBA", (W, bar_h), (255, 255, 255, 210))
@@ -210,13 +218,16 @@ def _overlay_text(image_data, text):
     for size in range(36, 16, -2):
         try:
             font = ImageFont.truetype(FONT_PATH, size)
+            log.info("font loaded: %s size=%d", FONT_PATH, size)
             break
         except OSError:
             continue
     if not font:
         try:
             font = ImageFont.load_default()
-        except Exception:
+            log.info("using default font")
+        except Exception as e:
+            log.warning("font fallback fail: %s", e)
             return image_data
     text = text[:120]
     lines = []
@@ -243,7 +254,9 @@ def _overlay_text(image_data, text):
         y += size + 4
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=85)
-    return buf.getvalue()
+    result = buf.getvalue()
+    log.info("overlay done: %d bytes", len(result))
+    return result
 
 
 def tg_publish(channel, text, image_data=None):
@@ -367,12 +380,15 @@ def run_once(channel, slot="default"):
     text, img_prompt = generate(channel, slot)
     if not text:
         log.error("generate failed"); return
+    log.info("post text: %d chars", len(text))
     img_raw = _make_image(img_prompt)
+    log.info("img_raw: %s", "OK" if img_raw else "NONE")
     img_overlay = _overlay_text(img_raw, text.split("\n")[0]) if img_raw else None
+    log.info("img_overlay: %s", "OK" if img_overlay else "NONE")
     _save_history(channel, text)
-    tg_publish(channel, text, img_overlay)
-    vk_publish(channel, text, img_overlay)
-    log.info("%s done", channel)
+    tg_r = tg_publish(channel, text, img_overlay)
+    vk_r = vk_publish(channel, text, img_overlay)
+    log.info("%s done: TG=%s VK=%s", channel, tg_r, vk_r)
 
 
 def main():
