@@ -187,13 +187,19 @@ def tg_publish(text, image_url=None):
         log.error("no TG token"); return False
     channel = os.environ.get("NG_TG_CHANNEL") or _env("NG_TG_CHANNEL", "@Ai_Lifes")
     if image_url:
-        data = _post(
-            "https://api.telegram.org/bot{}/sendPhoto".format(token),
-            {"chat_id": channel, "photo": image_url, "caption": text},
-            {"Content-Type": "application/json"}, timeout=60)
-        if data and data.get("ok"):
-            log.info("TG photo OK"); return True
-        log.warning("TG photo fail: %s", data)
+        log.info("sending photo to TG: %s", image_url[:80])
+        try:
+            body = json.dumps({"chat_id": channel, "photo": image_url, "caption": text}).encode()
+            req = urllib.request.Request(
+                "https://api.telegram.org/bot{}/sendPhoto".format(token),
+                data=body, headers={"Content-Type": "application/json"}, method="POST")
+            with urllib.request.urlopen(req, timeout=60, context=CTX) as r:
+                resp = json.loads(r.read().decode())
+                if resp.get("ok"):
+                    log.info("TG photo OK"); return True
+                log.warning("TG photo resp: %s", resp)
+        except Exception as e:
+            log.warning("TG photo exception: %s", e)
     data = _post(
         "https://api.telegram.org/bot{}/sendMessage".format(token),
         {"chat_id": channel, "text": text},
