@@ -145,16 +145,18 @@ def generate(slot):
                 url = ("https://generativelanguage.googleapis.com/v1beta/"
                        "models/{}:generateContent?key={}").format(model, key)
                 payload = {"contents": [{"parts": [{"text": prompt}]}],
-                           "generationConfig": {"maxOutputTokens": 2048, "temperature": 0.9}}
-                data = _post(url, payload, {"Content-Type": "application/json"}, timeout=30)
+                           "generationConfig": {"maxOutputTokens": 4096, "temperature": 0.9}}
+                data = _post(url, payload, {"Content-Type": "application/json"}, timeout=90)
                 if data is None:
                     time.sleep(10)
                     continue
                 try:
-                    raw = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                    cand = data["candidates"][0]
+                    raw = cand["content"]["parts"][0]["text"].strip()
+                    reason = cand.get("finishReason", "?")
                     first_line = raw.split("\n")[0].strip()
                     img_prompt = "AI technology " + first_line[:50]
-                    log.info("Generated %d chars, img: %s", len(raw), img_prompt)
+                    log.info("Generated %d chars, finish=%s, img=%s", len(raw), reason, img_prompt)
                     return raw, img_prompt
                 except (KeyError, IndexError):
                     break
