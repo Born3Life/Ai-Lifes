@@ -131,6 +131,9 @@ def _fetch_news():
 
 def generate(slot):
     prompt = PROMPTS[slot]
+    ctx = _history_context()
+    if ctx:
+        prompt += ctx
     if slot in ("morning", "evening"):
         news = _fetch_news()
         if news:
@@ -171,12 +174,18 @@ def _generate_image(prompt):
     if not prompt:
         return None
     url = "https://image.pollinations.ai/prompt/" + urllib.parse.quote(prompt) + "?width=1024&height=768"
+    log.info("img url: %s", url)
     try:
-        with urllib.request.urlopen(url, timeout=15, context=CTX) as r:
-            log.info("Image generated for: %s", prompt)
-            return r.read()
+        with urllib.request.urlopen(url, timeout=30, context=CTX) as r:
+            data = r.read()
+            ct = r.headers.get("Content-Type", "")
+            log.info("img response: %d bytes, type=%s", len(data), ct)
+            if "html" in ct or len(data) < 100:
+                log.warning("img not an image: %s", data[:200])
+                return None
+            return data
     except Exception as e:
-        log.warning("image gen failed: %s", e)
+        log.warning("img gen http fail: %s", e)
     return None
 
 
@@ -299,6 +308,30 @@ def _slot_by_hour(hour):
     return "evening"
 
 
+HISTORY_FILE = Path(__file__).parent / "history.json"
+
+
+def _load_history():
+    if HISTORY_FILE.exists():
+        return json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
+    return []
+
+
+def _save_history(text):
+    h = _load_history()
+    h.append(text)
+    HISTORY_FILE.write_text(json.dumps(h[-10:], ensure_ascii=False), encoding="utf-8")
+
+
+def _history_context():
+    h = _load_history()
+    if not h:
+        return ""
+    return "\n\nРанее ты уже писал эти посты (НЕ повторяй их темы, формулировки и мысли):\n" + "\n".join(
+        f"— {p.split(chr(10))[0][:80]}" for p in h[-10:]
+    )
+
+
 def run_once(slot=None):
     if not slot:
         hour = _now_hour()
@@ -307,6 +340,7 @@ def run_once(slot=None):
     text, img_prompt = generate(slot)
     img = _generate_image(img_prompt) if img_prompt else None
     if text:
+        _save_history(text)
         tg_publish(text, img)
         vk_publish(text, img)
         log.info("%s done", slot)
