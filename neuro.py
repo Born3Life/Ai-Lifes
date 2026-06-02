@@ -250,8 +250,8 @@ def _make_image(prompt, channel="ai"):
 
 
 def tg_publish(channel, text, image_data=None):
-    token = _env("NG_TG_TOKEN") if channel == "ai" else _env("NG_TG_TOKEN_SCIENCE")
-    chat = _env("NG_TG_CHANNEL") if channel == "ai" else _env("NG_TG_CHANNEL_SCIENCE")
+    token = (_env("NG_TG_TOKEN") if channel == "ai" else _env("NG_TG_TOKEN_SCIENCE")).strip()
+    chat = (_env("NG_TG_CHANNEL") if channel == "ai" else _env("NG_TG_CHANNEL_SCIENCE")).strip()
     if not token or not chat:
         log.error("no TG config for %s", channel)
         return False
@@ -312,8 +312,8 @@ def _vk_upload(group, image_data):
 
 
 def vk_publish(channel, text, image_data=None):
-    token = _env("NG_VK_TOKEN") if channel == "ai" else _env("NG_VK_TOKEN_SCIENCE")
-    group = _env("NG_VK_GROUP") if channel == "ai" else _env("NG_VK_GROUP_SCIENCE")
+    token = (_env("NG_VK_TOKEN") if channel == "ai" else _env("NG_VK_TOKEN_SCIENCE")).strip()
+    group = (_env("NG_VK_GROUP") if channel == "ai" else _env("NG_VK_GROUP_SCIENCE")).strip()
     if not token or not group:
         log.error("no VK config for %s", channel); return False
     owner = -abs(int(group))
