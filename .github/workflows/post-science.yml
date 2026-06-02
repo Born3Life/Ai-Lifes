@@ -24,4 +24,12 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install Pillow
+      - name: Debug TG
+        run: |
+          echo "=== Bot info ==="
+          curl -s "https://api.telegram.org/bot${NG_TG_TOKEN_SCIENCE}/getMe" | head -c 200
+          echo ""
+          echo "=== Chat info ==="
+          curl -s "https://api.telegram.org/bot${NG_TG_TOKEN_SCIENCE}/getChat?chat_id=@NaukaChannel" | head -c 200
+          echo ""
       - run: python neuro.py --channel science
