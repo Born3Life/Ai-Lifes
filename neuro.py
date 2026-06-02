@@ -107,11 +107,7 @@ PROMPTS = {
 
 
 def _fetch_news():
-    queries = [
-        "искусственный интеллект нейросети новости",
-        "AI artificial intelligence news",
-        "ChatGPT Gemini Claude новости",
-    ]
+    queries = ["искусственный интеллект нейросети новости"]
     seen: set[str] = set()
     items: list[str] = []
     for q in queries:
@@ -148,7 +144,7 @@ def generate(slot):
                        "models/{}:generateContent?key={}").format(model, key)
                 payload = {"contents": [{"parts": [{"text": prompt}]}],
                            "generationConfig": {"maxOutputTokens": 2048, "temperature": 0.85}}
-                data = _post(url, payload, {"Content-Type": "application/json"}, timeout=60)
+                data = _post(url, payload, {"Content-Type": "application/json"}, timeout=30)
                 if data is None:
                     time.sleep(10)
                     continue
@@ -174,10 +170,9 @@ def _generate_image(prompt):
     url = "https://image.pollinations.ai/prompt/" + urllib.parse.quote(prompt)
     url += "?width=1024&height=768&model=flux"
     try:
-        with urllib.request.urlopen(url, timeout=30, context=CTX) as r:
-            data = r.read()
-            log.info("Generated image %d bytes for: %s", len(data), prompt)
-            return data
+        with urllib.request.urlopen(url, timeout=15, context=CTX) as r:
+            log.info("Image generated for: %s", prompt)
+            return r.read()
     except Exception as e:
         log.warning("image gen failed: %s", e)
     return None
