@@ -114,7 +114,7 @@ def _fetch_news():
     items: list[str] = []
     for q in queries:
         url = ("https://news.google.com/rss/search?"
-               + urllib.parse.urlencode({"q": q, "hl": "ru", "gl": "RU"}))
+               + urllib.parse.urlencode({"q": q, "hl": "ru", "gl": "RU", "tbs": "qdr:d"}))
         try:
             with urllib.request.urlopen(url, timeout=15, context=CTX) as r:
                 root = ET.fromstring(r.read())
