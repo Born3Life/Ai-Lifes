@@ -156,6 +156,9 @@ def generate(slot):
                         parts = raw.rsplit("---IMAGE:", 1)
                         post_text = parts[0].strip()
                         img_prompt = parts[1].strip().split("\n")[0].strip()
+                    if not img_prompt:
+                        first_line = post_text.split("\n")[0].strip()
+                        img_prompt = "AI neural network technology, " + first_line[:40]
                     log.info("Generated %d chars, img: %s", len(post_text), img_prompt)
                     return post_text, img_prompt
                 except (KeyError, IndexError):
@@ -185,17 +188,19 @@ def tg_publish(text, image_data=None):
     channel = os.environ.get("NG_TG_CHANNEL") or _env("NG_TG_CHANNEL", "@Ai_Lifes")
     if image_data:
         boundary = "----boundary123"
-        body = (
-            ("--" + boundary + "\r\n"
-             'Content-Disposition: form-data; name="chat_id"\r\n\r\n' + channel + "\r\n"
-             "--" + boundary + "\r\n"
-             'Content-Disposition: form-data; name="caption"\r\n\r\n' + text + "\r\n"
-             "--" + boundary + "\r\n"
-             'Content-Disposition: form-data; name="photo"; filename="img.jpg"\r\n'
-             "Content-Type: image/jpeg\r\n\r\n").encode("utf-8")
-            + image_data
-            + ("\r\n--" + boundary + "--\r\n").encode("utf-8")
-        )
+        def _part(name, val, is_file=False):
+            h = 'Content-Disposition: form-data; name="{}"'.format(name)
+            if is_file:
+                h += '; filename="img.jpg"'
+            ct = "\r\nContent-Type: image/jpeg" if is_file else "\r\nContent-Type: text/plain; charset=utf-8"
+            return (h + ct + "\r\n\r\n").encode("utf-8") + val
+        def _e(s):
+            return s.encode("utf-8") if isinstance(s, str) else s
+        body = b""
+        for name, val in [("chat_id", _e(channel)), ("caption", _e(text))]:
+            body += ("--" + boundary + "\r\n").encode() + _part(name, val)
+        body += ("--" + boundary + "\r\n").encode() + _part("photo", image_data, is_file=True)
+        body += ("\r\n--" + boundary + "--\r\n").encode()
         req = urllib.request.Request(
             "https://api.telegram.org/bot{}/sendPhoto".format(token),
             data=body,
