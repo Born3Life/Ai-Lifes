@@ -66,7 +66,9 @@ FORMAT = (
     "6. В конце — пустая строка, затем призыв подписаться (строка с эмодзи).\n"
     "7. НЕ используй хештеги. НЕ обращайся к читателю напрямую "
     "('вы', 'друзья', 'ребята'). Используй безличные конструкции.\n"
-    "8. Длина: 500-1000 символов. Закончи мысль, не обрывай."
+    "8. Длина: 500-1000 символов. Закончи мысль, не обрывай.\n"
+    "9. В самом конце поста добавь строку ---IMAGE: (короткое описание "
+    "для генерации картинки, связанной с постом, до 60 символов, на английском)"
 )
 
 PROMPTS = {
@@ -151,20 +153,66 @@ def generate(slot):
                     time.sleep(10)
                     continue
                 try:
-                    text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-                    log.info("Generated %d chars: %s", len(text), repr(text[:80]))
-                    return text
+                    raw = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                    post_text = raw
+                    img_prompt = None
+                    if "---IMAGE:" in raw:
+                        parts = raw.rsplit("---IMAGE:", 1)
+                        post_text = parts[0].strip()
+                        img_prompt = parts[1].strip().split("\n")[0].strip()
+                    log.info("Generated %d chars, img: %s", len(post_text), img_prompt)
+                    return post_text, img_prompt
                 except (KeyError, IndexError):
                     break
     log.error("no provider")
+    return None, None
+
+
+def _generate_image(prompt):
+    if not prompt:
+        return None
+    url = "https://image.pollinations.ai/prompt/" + urllib.parse.quote(prompt)
+    url += "?width=1024&height=768&model=flux"
+    try:
+        with urllib.request.urlopen(url, timeout=30, context=CTX) as r:
+            data = r.read()
+            log.info("Generated image %d bytes for: %s", len(data), prompt)
+            return data
+    except Exception as e:
+        log.warning("image gen failed: %s", e)
     return None
 
 
-def tg_publish(text):
+def tg_publish(text, image_data=None):
     token = os.environ.get("NG_TG_TOKEN") or _env("NG_TG_TOKEN")
     if not token:
         log.error("no TG token"); return False
     channel = os.environ.get("NG_TG_CHANNEL") or _env("NG_TG_CHANNEL", "@Ai_Lifes")
+    if image_data:
+        boundary = "----boundary123"
+        body = (
+            ("--" + boundary + "\r\n"
+             'Content-Disposition: form-data; name="chat_id"\r\n\r\n' + channel + "\r\n"
+             "--" + boundary + "\r\n"
+             'Content-Disposition: form-data; name="caption"\r\n\r\n' + text + "\r\n"
+             "--" + boundary + "\r\n"
+             'Content-Disposition: form-data; name="photo"; filename="img.jpg"\r\n'
+             "Content-Type: image/jpeg\r\n\r\n").encode("utf-8")
+            + image_data
+            + ("\r\n--" + boundary + "--\r\n").encode("utf-8")
+        )
+        req = urllib.request.Request(
+            "https://api.telegram.org/bot{}/sendPhoto".format(token),
+            data=body,
+            headers={"Content-Type": "multipart/form-data; boundary=" + boundary},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=60, context=CTX) as r:
+                if json.loads(r.read().decode()).get("ok"):
+                    log.info("TG photo OK"); return True
+        except Exception as e:
+            log.warning("TG photo fail: %s", e)
     data = _post(
         "https://api.telegram.org/bot{}/sendMessage".format(token),
         {"chat_id": channel, "text": text},
@@ -174,14 +222,63 @@ def tg_publish(text):
     log.error("TG fail"); return False
 
 
-def vk_publish(text):
+def _vk_upload_image(group, image_data):
+    try:
+        upload_url = ("https://api.vk.com/method/photos.getWallUploadServer?"
+                      + urllib.parse.urlencode({"group_id": group,
+                                                 "access_token": os.environ.get("NG_VK_TOKEN") or _env("NG_VK_TOKEN"),
+                                                 "v": "5.199"}))
+        with urllib.request.urlopen(upload_url, timeout=15, context=CTX) as r:
+            resp = json.loads(r.read().decode())
+        url = resp.get("response", {}).get("upload_url")
+        if not url:
+            return None
+        boundary = "----boundary456"
+        body = (
+            ("--" + boundary + "\r\n"
+             'Content-Disposition: form-data; name="photo"; filename="img.jpg"\r\n'
+             "Content-Type: image/jpeg\r\n\r\n").encode("utf-8")
+            + image_data
+            + ("\r\n--" + boundary + "--\r\n").encode("utf-8")
+        )
+        req = urllib.request.Request(url, data=body,
+                                     headers={"Content-Type": "multipart/form-data; boundary=" + boundary},
+                                     method="POST")
+        with urllib.request.urlopen(req, timeout=30, context=CTX) as r:
+            upload = json.loads(r.read().decode())
+        save_url = ("https://api.vk.com/method/photos.saveWallPhoto?"
+                    + urllib.parse.urlencode({"group_id": group,
+                                              "server": upload.get("server"),
+                                              "photo": upload.get("photo"),
+                                              "hash": upload.get("hash"),
+                                              "access_token": os.environ.get("NG_VK_TOKEN") or _env("NG_VK_TOKEN"),
+                                              "v": "5.199"}))
+        with urllib.request.urlopen(save_url, timeout=15, context=CTX) as r:
+            save = json.loads(r.read().decode())
+        items = save.get("response", [])
+        if items:
+            return "photo{}_{}".format(items[0]["owner_id"], items[0]["id"])
+    except Exception as e:
+        log.warning("VK upload fail: %s", e)
+    return None
+
+
+def vk_publish(text, image_data=None):
     token = os.environ.get("NG_VK_TOKEN") or _env("NG_VK_TOKEN")
     group = os.environ.get("NG_VK_GROUP") or _env("NG_VK_GROUP")
     if not token or not group:
         log.error("no VK"); return False
     owner = -abs(int(group))
-    body = urllib.parse.urlencode({"owner_id": owner, "message": text,
-                                    "access_token": token, "v": "5.199"}).encode()
+    attach = []
+    if image_data:
+        att = _vk_upload_image(group, image_data)
+        if att:
+            attach.append(att)
+    params = {"owner_id": owner, "message": text,
+              "access_token": token, "v": "5.199"}
+    if attach:
+        params["attachments"] = ",".join(attach)
+    body = urllib.parse.urlencode(params).encode()
     req = urllib.request.Request("https://api.vk.com/method/wall.post", data=body, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=30, context=CTX) as r:
@@ -212,10 +309,11 @@ def run_once(slot=None):
         hour = _now_hour()
         slot = _slot_by_hour(hour)
     log.info("slot: %s (hour %d)", slot, _now_hour())
-    text = generate(slot)
+    text, img_prompt = generate(slot)
+    img = _generate_image(img_prompt) if img_prompt else None
     if text:
-        tg_publish(text)
-        vk_publish(text)
+        tg_publish(text, img)
+        vk_publish(text, img)
         log.info("%s done", slot)
     else:
         log.error("%s failed", slot)
@@ -234,10 +332,11 @@ def main():
         today = datetime.utcnow().strftime("%Y-%m-%d")
         for slot, h in SCHEDULE.items():
             if hour == h and not state.get(today, {}).get(slot):
-                text = generate(slot)
+                text, img_prompt = generate(slot)
+                img = _generate_image(img_prompt) if img_prompt else None
                 if text:
-                    tg_publish(text)
-                    vk_publish(text)
+                    tg_publish(text, img)
+                    vk_publish(text, img)
                     state.setdefault(today, {})[slot] = True
                     STATE.write_text(json.dumps(state, ensure_ascii=False, indent=2),
                                      encoding="utf-8")
