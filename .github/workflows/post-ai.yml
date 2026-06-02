@@ -1,16 +1,13 @@
-name: Post to TG and VK
+name: Post AI
 on:
   schedule:
-    - cron: "0 5 * * *"
+    - cron: "0 22 * * *"
+    - cron: "0 2 * * *"
+    - cron: "0 6 * * *"
     - cron: "0 10 * * *"
-    - cron: "0 16 * * *"
+    - cron: "0 14 * * *"
+    - cron: "0 18 * * *"
   workflow_dispatch:
-    inputs:
-      slot:
-        description: Post slot
-        required: false
-        default: ""
-        type: string
 
 jobs:
   post:
@@ -26,4 +23,5 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python neuro.py --once ${{ inputs.slot || '' }}
+      - run: pip install Pillow
+      - run: python neuro.py --channel ai

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""neuro-guide: автопостинг в TG и VK — утро, день, вечер."""
 from __future__ import annotations
 
+import io
 import json
 import logging
 import os
@@ -14,17 +14,20 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
 
+from PIL import Image, ImageDraw, ImageFont
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("neuro")
 
 CTX = ssl._create_unverified_context()
-STATE = Path(__file__).parent / "state.json"
-SCHEDULE = {"morning": 9, "afternoon": 14, "evening": 20}
+
+FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+
 
 def _env(key, default=None):
-    val = os.environ.get(key)
-    if val:
-        return val
+    v = os.environ.get(key)
+    if v:
+        return v
     p = Path(__file__).parent / ".env"
     if p.exists():
         for line in p.read_text(encoding="utf-8").splitlines():
@@ -41,190 +44,249 @@ def _post(url, data, headers=None, timeout=60):
         with urllib.request.urlopen(req, timeout=timeout, context=CTX) as r:
             return json.loads(r.read().decode())
     except urllib.error.HTTPError as e:
-        body_txt = e.read().decode()[:200]
+        t = e.read().decode()[:200]
         if e.code == 429:
             log.warning("429 (quota)")
         elif e.code == 503:
             log.info("503 (loading)")
         else:
-            log.warning("HTTP %d: %s", e.code, body_txt)
+            log.warning("HTTP %d: %s", e.code, t)
     except Exception as e:
         log.debug("req error: %s", e)
     return None
 
 
+def _multipart_post(url, fields, file_field, file_data, filename="img.jpg", timeout=60):
+    boundary = "----boundary789"
+    body = b""
+    for k, v in fields.items():
+        body += ("--" + boundary + "\r\n"
+                 'Content-Disposition: form-data; name="{}"\r\n'
+                 'Content-Type: text/plain; charset=utf-8\r\n\r\n'
+                 "{}\r\n").format(k, v).encode("utf-8")
+    body += ("--" + boundary + "\r\n"
+             'Content-Disposition: form-data; name="{}"; filename="{}"\r\n'
+             'Content-Type: image/jpeg\r\n\r\n').format(file_field, filename).encode("utf-8")
+    body += file_data
+    body += ("\r\n--" + boundary + "--\r\n").encode("utf-8")
+    req = urllib.request.Request(
+        url, data=body,
+        headers={"Content-Type": "multipart/form-data; boundary=" + boundary},
+        method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout, context=CTX) as r:
+            return json.loads(r.read().decode())
+    except Exception as e:
+        log.warning("multipart fail: %s", e)
+    return None
+
+
 FORMAT = (
     "Оформление поста (строго соблюдай):\n"
-    "1. Первая строка — яркий заголовок-кликбейт (одна строка, с эмодзи).\n"
-    "2. После заголовка — пустая строка (отступ).\n"
-    "3. Основной текст разбивай на абзацы по 2-3 предложения. "
-    "Между абзацами пустая строка. Используй эмодзи в начале абзацев.\n"
-    "4. Если перечисляешь — используй маркированные списки с • или —, "
-    "каждый пункт с новой строки.\n"
-    "5. Тон — живой, энергичный, но без воды. "
-    "Минимум прилагательных, максимум фактов и пользы.\n"
-    "6. В конце — пустая строка, затем призыв подписаться (строка с эмодзи).\n"
-    "7. НЕ используй хештеги. НЕ обращайся к читателю напрямую "
-    "('вы', 'друзья', 'ребята'). Используй безличные конструкции.\n"
-    "8. Длина: 500-1000 символов, но если темы требует больше — пиши больше. "
-    "Главное — закончи мысль, не обрывай."
+    "1. Первая строка — яркий заголовок (одна строка, с эмодзи, как новость).\n"
+    "2. После заголовка — пустая строка.\n"
+    "3. Текст: 3-4 коротких абзаца, только факты, без воды.\n"
+    "4. Никаких приветствий, обращений к читателю, вопросов.\n"
+    "5. Каждый абзац — 1-2 предложения, между абзацами пустая строка.\n"
+    "6. Тон — журналистский, нейтральный, информационный.\n"
+    "7. Длина: 400-800 символов. Закончи мысль.\n"
+    "8. Без хештегов."
 )
 
-PROMPTS = {
-    "morning": (
-        "Ты пишешь пост для Telegram-канала «Нейросети для жизни». "
-        "Это НЕ чат, а информационный канал."
-        + FORMAT + "\n\n" +
-        "Тема поста: выбери ОДНУ свежую и конкретную новость из мира ИИ "
-        "(выход модели, обновление ChatGPT/Claude/Gemini, новый инструмент). "
-        "Объясни суть новости и почему это важно обычному пользователю. "
-        "Пример заголовка: "
-        "«🔥 Google Gemini 2.5 Flash теперь бесплатен для всех»"
+PROMPTS_AI = {
+    "default": (
+        "Ты пишешь пост для Telegram-канала «Нейросети для жизни» (AI-новости)."
+        + FORMAT + "\n\n"
+        + "Тема: свежая новость из мира искусственного интеллекта "
+        "(выход модели, обновление, новый инструмент, событие в индустрии). "
+        "Объясни суть и почему это важно. "
+        "Пример заголовка: «Google Gemini 2.5 Flash теперь доступен всем бесплатно»"
     ),
-    "afternoon": (
-        "Ты пишешь пост для Telegram-канала «Нейросети для жизни». "
-        "Это НЕ чат, а информационный канал."
-        + FORMAT + "\n\n" +
-        "Тема поста: пошаговая инструкция «как сделать конкретную вещь "
-        "с помощью нейросети». Выбери одну задачу (перевести видео, "
-        "написать пост, создать картинку, сделать конспект). "
-        "Распиши 3-5 шагов списком. "
-        "Пример заголовка: "
-        "«📱 Как перевести любое видео на русский за 2 минуты»"
-    ),
-    "evening": (
-        "Ты пишешь пост для Telegram-канала «Нейросети для жизни». "
-        "Это НЕ чат, а информационный канал."
-        + FORMAT + "\n\n" +
-        "Тема поста: подборка 3-4 конкретных и полезных AI-инструментов. "
-        "По каждому: название, что делает, почему стоит попробовать. "
-        "ИЛИ разбор одного интересного кейса использования нейросетей. "
-        "Пример заголовка: "
-        "«🧰 3 бесплатных нейросети, которые заменят дизайнера»"
+}
+
+PROMPTS_SCIENCE = {
+    "default": (
+        "Ты пишешь пост для Telegram-канала о науке. "
+        "Это НЕ чат, а новостной канал."
+        + FORMAT + "\n\n"
+        + "Тема: новость из мира науки (исследование, открытие, "
+        "медицина, физика, биология, психология, технологии). "
+        "Выбери конкретную новость. Опиши суть исследования и его значение. "
+        "Пример заголовка: «Учёные выяснили, что сауна снижает риск инфаркта на 50%»"
     ),
 }
 
 
-def _fetch_news():
-    queries = ["искусственный интеллект нейросети новости"]
-    seen: set[str] = set()
-    items: list[str] = []
-    for q in queries:
-        url = ("https://news.google.com/rss/search?"
-               + urllib.parse.urlencode({"q": q, "hl": "ru", "gl": "RU", "tbs": "qdr:d"}))
-        try:
-            with urllib.request.urlopen(url, timeout=15, context=CTX) as r:
-                root = ET.fromstring(r.read())
-                for item in root.iter("item"):
-                    title = item.findtext("title", "")
-                    if not title or title in seen:
-                        continue
+def _fetch_news(query):
+    url = ("https://news.google.com/rss/search?"
+           + urllib.parse.urlencode({"q": query, "hl": "ru", "gl": "RU", "tbs": "qdr:d"}))
+    items = []
+    seen = set()
+    try:
+        with urllib.request.urlopen(url, timeout=15, context=CTX) as r:
+            root = ET.fromstring(r.read())
+            for item in root.iter("item"):
+                title = item.findtext("title", "")
+                if title and title not in seen:
                     seen.add(title)
                     items.append(title)
-                    if len(items) >= 8:
-                        return items
-        except Exception as e:
-            log.debug("news fetch error: %s", e)
+                    if len(items) >= 5:
+                        break
+    except Exception as e:
+        log.debug("news fetch error: %s", e)
     return items
 
 
-def generate(slot):
-    prompt = PROMPTS[slot]
-    ctx = _history_context()
+def _gemini(prompt):
+    key = _env("NG_GEMINI_KEY")
+    if not key:
+        return None
+    for model in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-001"]:
+        for _ in range(3):
+            url = ("https://generativelanguage.googleapis.com/v1beta/"
+                   "models/{}:generateContent?key={}").format(model, key)
+            payload = {"contents": [{"parts": [{"text": prompt}]}],
+                       "generationConfig": {"maxOutputTokens": 2048, "temperature": 0.85}}
+            data = _post(url, payload, {"Content-Type": "application/json"}, timeout=60)
+            if data is None:
+                time.sleep(5)
+                continue
+            try:
+                cand = data["candidates"][0]
+                text = cand["content"]["parts"][0]["text"].strip()
+                reason = cand.get("finishReason", "?")
+                log.info("Gemini: %d chars, finish=%s", len(text), reason)
+                return text
+            except (KeyError, IndexError):
+                break
+    return None
+
+
+def generate(channel, slot="default"):
+    if channel == "ai":
+        prompts = PROMPTS_AI
+        news_query = "искусственный интеллект нейросети ChatGPT новости"
+    else:
+        prompts = PROMPTS_SCIENCE
+        news_query = "наука открытия исследования природа технология"
+    prompt = prompts.get(slot, prompts["default"])
+    ctx = _history_context(channel)
     if ctx:
         prompt += ctx
-    if slot in ("morning", "evening"):
-        news = _fetch_news()
-        if news:
-            prompt += "\n\nВот свежие новости из мира ИИ (используй их как основу для поста):\n"
-            prompt += "\n".join(f"— {n}" for n in news)
-    key = os.environ.get("NG_GEMINI_KEY") or _env("NG_GEMINI_KEY")
-    if key:
-        for model in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-001"]:
-            for _ in range(3):
-                url = ("https://generativelanguage.googleapis.com/v1beta/"
-                       "models/{}:generateContent?key={}").format(model, key)
-                payload = {"contents": [{"parts": [{"text": prompt}]}],
-                           "generationConfig": {"maxOutputTokens": 4096, "temperature": 0.9}}
-                data = _post(url, payload, {"Content-Type": "application/json"}, timeout=90)
-                if data is None:
-                    time.sleep(10)
-                    continue
-                try:
-                    cand = data["candidates"][0]
-                    raw = cand["content"]["parts"][0]["text"].strip()
-                    reason = cand.get("finishReason", "?")
-                    first_line = raw.split("\n")[0].strip()
-                    img_prompt = "AI technology " + first_line[:50]
-                    log.info("Generated %d chars, finish=%s, img=%s", len(raw), reason, img_prompt)
-                    return raw, img_prompt
-                except (KeyError, IndexError):
-                    break
-    log.error("no provider")
-    return None, None
+    news = _fetch_news(news_query)
+    if news:
+        prompt += "\n\nСвежие новости (используй как основу для поста):\n" + "\n".join(f"— {n}" for n in news)
+    text = _gemini(prompt)
+    if not text:
+        return None, None
+    headline = text.split("\n")[0].strip()
+    img_prompt = "news " + headline[:60]
+    return text, img_prompt
 
 
-def _generate_image(prompt):
-    if not prompt:
-        return None
+def _make_image(prompt):
     url = "https://image.pollinations.ai/prompt/" + urllib.parse.quote(prompt) + "?width=1024&height=768"
     log.info("img url: %s", url)
-    return url
-
-
-def _download(url):
     try:
         with urllib.request.urlopen(url, timeout=20, context=CTX) as r:
             return r.read()
     except Exception as e:
-        log.warning("download fail: %s", e)
+        log.warning("img fetch fail: %s", e)
     return None
 
 
-def tg_publish(text, image_url=None):
-    token = os.environ.get("NG_TG_TOKEN") or _env("NG_TG_TOKEN")
-    if not token:
-        log.error("no TG token"); return False
-    channel = os.environ.get("NG_TG_CHANNEL") or _env("NG_TG_CHANNEL", "@Ai_Lifes")
-    if image_url:
-        log.info("sending photo to TG: %s", image_url[:80])
+def _overlay_text(image_data, text):
+    try:
+        img = Image.open(io.BytesIO(image_data)).convert("RGB")
+    except Exception as e:
+        log.warning("pillow open fail: %s", e)
+        return image_data
+    W, H = img.size
+    bar_h = int(H * 0.28)
+    draw = ImageDraw.Draw(img)
+    overlay = Image.new("RGBA", (W, bar_h), (255, 255, 255, 210))
+    img.paste(overlay, (0, 0), overlay)
+    font = None
+    for size in range(36, 16, -2):
         try:
-            body = json.dumps({"chat_id": channel, "photo": image_url, "caption": text}).encode()
-            req = urllib.request.Request(
-                "https://api.telegram.org/bot{}/sendPhoto".format(token),
-                data=body, headers={"Content-Type": "application/json"}, method="POST")
-            with urllib.request.urlopen(req, timeout=60, context=CTX) as r:
-                resp = json.loads(r.read().decode())
-                if resp.get("ok"):
-                    log.info("TG photo OK"); return True
-                log.warning("TG photo resp: %s", resp)
-        except Exception as e:
-            log.warning("TG photo exception: %s", e)
-    data = _post(
+            font = ImageFont.truetype(FONT_PATH, size)
+            break
+        except OSError:
+            continue
+    if not font:
+        try:
+            font = ImageFont.load_default()
+        except Exception:
+            return image_data
+    text = text[:120]
+    lines = []
+    for line in text.split("\n"):
+        if draw.textlength(line, font=font) > W - 40:
+            words = line.split()
+            cur = ""
+            for w in words:
+                test = (cur + " " + w).strip()
+                if draw.textlength(test, font=font) > W - 40:
+                    lines.append(cur)
+                    cur = w
+                else:
+                    cur = test
+            if cur:
+                lines.append(cur)
+        else:
+            lines.append(line)
+    y = (bar_h - len(lines) * (size + 4)) // 2 + 4
+    for line in lines:
+        tw = draw.textlength(line, font=font)
+        x = (W - tw) // 2
+        draw.text((x, y), line, font=font, fill=(20, 20, 20))
+        y += size + 4
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=85)
+    return buf.getvalue()
+
+
+def tg_publish(channel, text, image_data=None):
+    token = _env("NG_TG_TOKEN") if channel == "ai" else _env("NG_TG_TOKEN_SCIENCE")
+    chat = _env("NG_TG_CHANNEL") if channel == "ai" else _env("NG_TG_CHANNEL_SCIENCE")
+    if not token or not chat:
+        log.error("no TG config for %s", channel)
+        return False
+    if image_data:
+        resp = _multipart_post(
+            "https://api.telegram.org/bot{}/sendPhoto".format(token),
+            {"chat_id": chat, "caption": text},
+            "photo", image_data, timeout=60)
+        if resp and resp.get("ok"):
+            log.info("TG photo OK"); return True
+        log.warning("TG photo fail, fallback text")
+    resp = _post(
         "https://api.telegram.org/bot{}/sendMessage".format(token),
-        {"chat_id": channel, "text": text},
+        {"chat_id": chat, "text": text},
         {"Content-Type": "application/json"}, timeout=30)
-    if data and data.get("ok"):
+    if resp and resp.get("ok"):
         log.info("TG OK"); return True
     log.error("TG fail"); return False
 
 
-def _vk_upload_image(group, image_data):
+def _vk_upload(group, image_data):
     try:
-        upload_url = ("https://api.vk.com/method/photos.getWallUploadServer?"
-                      + urllib.parse.urlencode({"group_id": group,
-                                                 "access_token": os.environ.get("NG_VK_TOKEN") or _env("NG_VK_TOKEN"),
-                                                 "v": "5.199"}))
-        with urllib.request.urlopen(upload_url, timeout=15, context=CTX) as r:
-            resp = json.loads(r.read().decode())
-        url = resp.get("response", {}).get("upload_url")
-        if not url:
+        token = _env("NG_VK_TOKEN")
+        if not token:
             return None
-        boundary = "----boundary456"
+        url = ("https://api.vk.com/method/photos.getWallUploadServer?"
+               + urllib.parse.urlencode({"group_id": group, "access_token": token, "v": "5.199"}))
+        with urllib.request.urlopen(url, timeout=15, context=CTX) as r:
+            resp = json.loads(r.read().decode())
+        upload_url = resp.get("response", {}).get("upload_url")
+        if not upload_url:
+            return None
+        boundary = "----vk789"
         h = ('Content-Disposition: form-data; name="photo"; filename="img.jpg"\r\n'
              'Content-Type: image/jpeg\r\n\r\n').encode("utf-8")
-        body = b"--" + boundary.encode() + b"\r\n" + h + image_data + b"\r\n--" + boundary.encode() + b"--\r\n"
-        req = urllib.request.Request(url, data=body,
+        body = (b"--" + boundary.encode() + b"\r\n" + h + image_data +
+                b"\r\n--" + boundary.encode() + b"--\r\n")
+        req = urllib.request.Request(upload_url, data=body,
                                      headers={"Content-Type": "multipart/form-data; boundary=" + boundary},
                                      method="POST")
         with urllib.request.urlopen(req, timeout=30, context=CTX) as r:
@@ -234,7 +296,7 @@ def _vk_upload_image(group, image_data):
                                               "server": upload.get("server"),
                                               "photo": upload.get("photo"),
                                               "hash": upload.get("hash"),
-                                              "access_token": os.environ.get("NG_VK_TOKEN") or _env("NG_VK_TOKEN"),
+                                              "access_token": token,
                                               "v": "5.199"}))
         with urllib.request.urlopen(save_url, timeout=15, context=CTX) as r:
             save = json.loads(r.read().decode())
@@ -246,21 +308,18 @@ def _vk_upload_image(group, image_data):
     return None
 
 
-def vk_publish(text, image_url=None):
-    token = os.environ.get("NG_VK_TOKEN") or _env("NG_VK_TOKEN")
-    group = os.environ.get("NG_VK_GROUP") or _env("NG_VK_GROUP")
+def vk_publish(channel, text, image_data=None):
+    token = _env("NG_VK_TOKEN") if channel == "ai" else _env("NG_VK_TOKEN_SCIENCE")
+    group = _env("NG_VK_GROUP") if channel == "ai" else _env("NG_VK_GROUP_SCIENCE")
     if not token or not group:
-        log.error("no VK"); return False
+        log.error("no VK config for %s", channel); return False
     owner = -abs(int(group))
     attach = []
-    if image_url:
-        img_data = _download(image_url)
-        if img_data:
-            att = _vk_upload_image(group, img_data)
-            if att:
-                attach.append(att)
-    params = {"owner_id": owner, "message": text,
-              "access_token": token, "v": "5.199"}
+    if image_data:
+        att = _vk_upload(group, image_data)
+        if att:
+            attach.append(att)
+    params = {"owner_id": owner, "message": text, "access_token": token, "v": "5.199"}
     if attach:
         params["attachments"] = ",".join(attach)
     body = urllib.parse.urlencode(params).encode()
@@ -274,83 +333,60 @@ def vk_publish(text, image_url=None):
     return False
 
 
-def _now_hour():
-    return datetime.utcnow().hour + 4
+HISTORY_DIR = Path(__file__).parent
 
 
-def _slot_by_hour(hour):
-    for slot, h in SCHEDULE.items():
-        if hour == h:
-            return slot
-    if 6 <= hour < 12:
-        return "morning"
-    if 12 <= hour < 18:
-        return "afternoon"
-    return "evening"
+def _history_path(channel):
+    return HISTORY_DIR / f"history_{channel}.json"
 
 
-HISTORY_FILE = Path(__file__).parent / "history.json"
-
-
-def _load_history():
-    if HISTORY_FILE.exists():
-        return json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
+def _load_history(channel):
+    p = _history_path(channel)
+    if p.exists():
+        return json.loads(p.read_text(encoding="utf-8"))
     return []
 
 
-def _save_history(text):
-    h = _load_history()
+def _save_history(channel, text):
+    h = _load_history(channel)
     h.append(text)
-    HISTORY_FILE.write_text(json.dumps(h[-10:], ensure_ascii=False), encoding="utf-8")
+    _history_path(channel).write_text(json.dumps(h[-10:], ensure_ascii=False), encoding="utf-8")
 
 
-def _history_context():
-    h = _load_history()
+def _history_context(channel):
+    h = _load_history(channel)
     if not h:
         return ""
-    return "\n\nВАЖНО: не повторяй темы этих предыдущих постов:\n" + "\n".join(
+    return "\n\nНЕ повторяй темы этих предыдущих постов:\n" + "\n".join(
         f"— {p.split(chr(10))[0][:60]}" for p in h[-10:]
     )
 
 
-def run_once(slot=None):
-    if not slot:
-        hour = _now_hour()
-        slot = _slot_by_hour(hour)
-    log.info("slot: %s (hour %d)", slot, _now_hour())
-    text, img_prompt = generate(slot)
-    img_url = _generate_image(img_prompt) if img_prompt else None
-    if text:
-        _save_history(text)
-        tg_publish(text, img_url)
-        vk_publish(text, img_url)
-        log.info("%s done", slot)
-    else:
-        log.error("%s failed", slot)
+def run_once(channel, slot="default"):
+    log.info("channel=%s slot=%s", channel, slot)
+    text, img_prompt = generate(channel, slot)
+    if not text:
+        log.error("generate failed"); return
+    img_raw = _make_image(img_prompt)
+    img_overlay = _overlay_text(img_raw, text.split("\n")[0]) if img_raw else None
+    _save_history(channel, text)
+    tg_publish(channel, text, img_overlay)
+    vk_publish(channel, text, img_overlay)
+    log.info("%s done", channel)
 
 
 def main():
-    if "--once" in sys.argv:
-        i = sys.argv.index("--once")
-        slot = sys.argv[i + 1] if i + 1 < len(sys.argv) and not sys.argv[i + 1].startswith("-") else None
-        run_once(slot)
-        return
-    log.info("neuro-guide started (scheduler mode)")
-    while True:
-        hour = _now_hour()
-        state = json.loads(STATE.read_text(encoding="utf-8")) if STATE.exists() else {}
-        today = datetime.utcnow().strftime("%Y-%m-%d")
-        for slot, h in SCHEDULE.items():
-            if hour == h and not state.get(today, {}).get(slot):
-                text, img_prompt = generate(slot)
-                img_url = _generate_image(img_prompt) if img_prompt else None
-                if text:
-                    tg_publish(text, img_url)
-                    vk_publish(text, img_url)
-                    state.setdefault(today, {})[slot] = True
-                    STATE.write_text(json.dumps(state, ensure_ascii=False, indent=2),
-                                     encoding="utf-8")
-        time.sleep(60)
+    channel = "ai"
+    slot = "default"
+    if "--channel" in sys.argv:
+        i = sys.argv.index("--channel")
+        if i + 1 < len(sys.argv):
+            channel = sys.argv[i + 1]
+    if "--slot" in sys.argv:
+        i = sys.argv.index("--slot")
+        if i + 1 < len(sys.argv):
+            slot = sys.argv[i + 1]
+    run_once(channel, slot)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,27 @@
+name: Post Science
+on:
+  schedule:
+    - cron: "0 20 * * *"
+    - cron: "0 0 * * *"
+    - cron: "0 4 * * *"
+    - cron: "0 8 * * *"
+    - cron: "0 12 * * *"
+    - cron: "0 16 * * *"
+  workflow_dispatch:
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    env:
+      NG_GEMINI_KEY: ${{ secrets.NG_GEMINI_KEY }}
+      NG_TG_TOKEN: ${{ secrets.NG_TG_TOKEN_SCIENCE }}
+      NG_TG_CHANNEL: ${{ secrets.NG_TG_CHANNEL_SCIENCE }}
+      NG_VK_TOKEN: ${{ secrets.NG_VK_TOKEN_SCIENCE }}
+      NG_VK_GROUP: ${{ secrets.NG_VK_GROUP_SCIENCE }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install Pillow
+      - run: python neuro.py --channel science
