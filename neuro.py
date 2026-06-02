@@ -272,9 +272,9 @@ def tg_publish(channel, text, image_data=None):
     log.error("TG fail"); return False
 
 
-def _vk_upload(group, image_data):
+def _vk_upload(channel, group, image_data):
     try:
-        token = _env("NG_VK_TOKEN")
+        token = (_env("NG_VK_TOKEN") if channel == "ai" else _env("NG_VK_TOKEN_SCIENCE")).strip()
         if not token:
             return None
         url = ("https://api.vk.com/method/photos.getWallUploadServer?"
@@ -319,7 +319,7 @@ def vk_publish(channel, text, image_data=None):
     owner = -abs(int(group))
     attach = []
     if image_data:
-        att = _vk_upload(group, image_data)
+        att = _vk_upload(channel, group, image_data)
         if att:
             attach.append(att)
     params = {"owner_id": owner, "message": text, "access_token": token, "v": "5.199"}
