@@ -10,6 +10,7 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
 
@@ -103,8 +104,40 @@ PROMPTS = {
 }
 
 
+def _fetch_news():
+    queries = [
+        "искусственный интеллект нейросети новости",
+        "AI artificial intelligence news",
+        "ChatGPT Gemini Claude новости",
+    ]
+    seen: set[str] = set()
+    items: list[str] = []
+    for q in queries:
+        url = ("https://news.google.com/rss/search?"
+               + urllib.parse.urlencode({"q": q, "hl": "ru", "gl": "RU"}))
+        try:
+            with urllib.request.urlopen(url, timeout=15, context=CTX) as r:
+                root = ET.fromstring(r.read())
+                for item in root.iter("item"):
+                    title = item.findtext("title", "")
+                    if not title or title in seen:
+                        continue
+                    seen.add(title)
+                    items.append(title)
+                    if len(items) >= 8:
+                        return items
+        except Exception as e:
+            log.debug("news fetch error: %s", e)
+    return items
+
+
 def generate(slot):
     prompt = PROMPTS[slot]
+    if slot in ("morning", "evening"):
+        news = _fetch_news()
+        if news:
+            prompt += "\n\nВот свежие новости из мира ИИ (используй их как основу для поста):\n"
+            prompt += "\n".join(f"— {n}" for n in news)
     key = os.environ.get("NG_GEMINI_KEY") or _env("NG_GEMINI_KEY")
     if key:
         for model in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-001"]:
