@@ -170,8 +170,7 @@ def generate(slot):
 def _generate_image(prompt):
     if not prompt:
         return None
-    url = "https://image.pollinations.ai/prompt/" + urllib.parse.quote(prompt)
-    url += "?width=1024&height=768&model=flux"
+    url = "https://image.pollinations.ai/prompt/" + urllib.parse.quote(prompt) + "?width=1024&height=768"
     try:
         with urllib.request.urlopen(url, timeout=15, context=CTX) as r:
             log.info("Image generated for: %s", prompt)
@@ -234,13 +233,9 @@ def _vk_upload_image(group, image_data):
         if not url:
             return None
         boundary = "----boundary456"
-        body = (
-            ("--" + boundary + "\r\n"
-             'Content-Disposition: form-data; name="photo"; filename="img.jpg"\r\n'
-             "Content-Type: image/jpeg\r\n\r\n").encode("utf-8")
-            + image_data
-            + ("\r\n--" + boundary + "--\r\n").encode("utf-8")
-        )
+        h = ('Content-Disposition: form-data; name="photo"; filename="img.jpg"\r\n'
+             'Content-Type: image/jpeg\r\n\r\n').encode("utf-8")
+        body = b"--" + boundary.encode() + b"\r\n" + h + image_data + b"\r\n--" + boundary.encode() + b"--\r\n"
         req = urllib.request.Request(url, data=body,
                                      headers={"Content-Type": "multipart/form-data; boundary=" + boundary},
                                      method="POST")
