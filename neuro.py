@@ -188,48 +188,38 @@ def generate(channel, slot="default"):
     return text, img_prompt
 
 
-def _make_image(prompt):
-    url = "https://image.pollinations.ai/prompt/" + urllib.parse.quote(prompt) + "?width=1024&height=768"
-    log.info("fetching img: %s", url)
-    try:
-        with urllib.request.urlopen(url, timeout=25, context=CTX) as r:
-            data = r.read()
-            log.info("img fetched: %d bytes, ct=%s", len(data), r.headers.get("Content-Type"))
-            return data
-    except Exception as e:
-        log.warning("img fetch fail: %s", e)
-    return None
-
-
-def _overlay_text(image_data, text):
-    log.info("overlay: %d bytes, text=%s", len(image_data), text[:40])
-    try:
-        img = Image.open(io.BytesIO(image_data)).convert("RGB")
-    except Exception as e:
-        log.warning("pillow open fail: %s", e)
-        return image_data
-    W, H = img.size
-    log.info("image size: %dx%d", W, H)
-    bar_h = int(H * 0.28)
+def _make_image(prompt, channel="ai"):
+    log.info("generating image from prompt: %s", prompt[:60])
+    W, H = 1024, 768
+    if channel == "ai":
+        c1, c2 = (20, 30, 60), (40, 60, 120)
+    else:
+        c1, c2 = (20, 60, 40), (40, 120, 80)
+    img = Image.new("RGB", (W, H), c1)
     draw = ImageDraw.Draw(img)
-    overlay = Image.new("RGBA", (W, bar_h), (255, 255, 255, 210))
+    for y in range(H):
+        r = int(c1[0] + (c2[0] - c1[0]) * y / H)
+        g = int(c1[1] + (c2[1] - c1[1]) * y / H)
+        b = int(c1[2] + (c2[2] - c1[2]) * y / H)
+        draw.line([(0, y), (W, y)], fill=(r, g, b))
+    bar_h = int(H * 0.30)
+    overlay = Image.new("RGBA", (W, bar_h), (255, 255, 255, 220))
     img.paste(overlay, (0, 0), overlay)
     font = None
-    for size in range(36, 16, -2):
+    for size in range(40, 18, -2):
         try:
             font = ImageFont.truetype(FONT_PATH, size)
-            log.info("font loaded: %s size=%d", FONT_PATH, size)
             break
         except OSError:
             continue
     if not font:
         try:
             font = ImageFont.load_default()
-            log.info("using default font")
-        except Exception as e:
-            log.warning("font fallback fail: %s", e)
-            return image_data
-    text = text[:120]
+        except Exception:
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=85)
+            return buf.getvalue()
+    text = prompt[:120]
     lines = []
     for line in text.split("\n"):
         if draw.textlength(line, font=font) > W - 40:
@@ -253,9 +243,9 @@ def _overlay_text(image_data, text):
         draw.text((x, y), line, font=font, fill=(20, 20, 20))
         y += size + 4
     buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=85)
+    img.save(buf, format="JPEG", quality=90)
     result = buf.getvalue()
-    log.info("overlay done: %d bytes", len(result))
+    log.info("image done: %d bytes, %dx%d", len(result), W, H)
     return result
 
 
@@ -381,13 +371,11 @@ def run_once(channel, slot="default"):
     if not text:
         log.error("generate failed"); return
     log.info("post text: %d chars", len(text))
-    img_raw = _make_image(img_prompt)
+    img_raw = _make_image(img_prompt, channel)
     log.info("img_raw: %s", "OK" if img_raw else "NONE")
-    img_overlay = _overlay_text(img_raw, text.split("\n")[0]) if img_raw else None
-    log.info("img_overlay: %s", "OK" if img_overlay else "NONE")
     _save_history(channel, text)
-    tg_r = tg_publish(channel, text, img_overlay)
-    vk_r = vk_publish(channel, text, img_overlay)
+    tg_r = tg_publish(channel, text, img_raw)
+    vk_r = vk_publish(channel, text, img_raw)
     log.info("%s done: TG=%s VK=%s", channel, tg_r, vk_r)
 
 
