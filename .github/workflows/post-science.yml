@@ -18,6 +18,7 @@ jobs:
       NG_TG_CHANNEL_SCIENCE: ${{ secrets.NG_TG_CHANNEL_SCIENCE }}
       NG_VK_TOKEN_SCIENCE: ${{ secrets.NG_VK_TOKEN_SCIENCE }}
       NG_VK_GROUP_SCIENCE: ${{ secrets.NG_VK_GROUP_SCIENCE }}
+      NG_HF_TOKEN: ${{ secrets.NG_HF_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
