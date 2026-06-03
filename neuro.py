@@ -5,6 +5,7 @@ import io
 import json
 import logging
 import os
+import re
 import ssl
 import sys
 import time
@@ -22,6 +23,27 @@ log = logging.getLogger("neuro")
 CTX = ssl._create_unverified_context()
 
 FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+
+_EMOJI_RE = re.compile(
+    "["
+    "\U0001F600-\U0001F64F"
+    "\U0001F300-\U0001F5FF"
+    "\U0001F680-\U0001F6FF"
+    "\U0001F1E0-\U0001F1FF"
+    "\U00002702-\U000027B0"
+    "\U000024C2-\U0001F251"
+    "\U0001F900-\U0001F9FF"
+    "\U0001FA00-\U0001FA6F"
+    "\U0001FA70-\U0001FAFF"
+    "\U00002600-\U000026FF"
+    "\U0000FE00-\U0000FE0F"
+    "\U0000200D"
+    "\U00002B50"
+    "\U00002764"
+    "]+", flags=re.UNICODE
+)
+
+HF_IMAGE_URL = "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell"
 
 
 def _env(key, default=None):
@@ -91,10 +113,12 @@ FORMAT = (
     "2. После заголовка — пустая строка.\n"
     "3. Текст: 3-4 коротких абзаца, только факты, без воды.\n"
     "4. Никаких приветствий, обращений к читателю, вопросов.\n"
-    "5. Каждый абзац — 1-2 предложения, между абзацами пустая строка.\n"
+    "5. Каждый абзац — 1-2 предложения, между абзацами обязательно пустая строка.\n"
     "6. Тон — журналистский, нейтральный, информационный.\n"
     "7. Длина: 400-800 символов. Закончи мысль.\n"
-    "8. Без хештегов."
+    "8. Без хештегов.\n"
+    "9. ЗАПРЕЩЕНО использовать символы ** для выделения текста. "
+    "Пиши обычным текстом, без Markdown."
 )
 
 PROMPTS_AI = {
@@ -139,6 +163,45 @@ def _fetch_news(query):
     except Exception as e:
         log.debug("news fetch error: %s", e)
     return items
+
+
+def _strip_emojis(text: str) -> str:
+    return _EMOJI_RE.sub("", text).strip()
+
+
+def _hf_image(prompt: str) -> bytes | None:
+    token = _env("NG_HF_TOKEN")
+    if not token:
+        log.info("NG_HF_TOKEN not set, skipping HF image")
+        return None
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    payload = {"inputs": prompt}
+    req = urllib.request.Request(
+        HF_IMAGE_URL, data=json.dumps(payload).encode(), headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=90, context=CTX) as r:
+            raw = r.read()
+            ct = r.headers.get("Content-Type", "")
+            if ct.startswith("application/json"):
+                err = json.loads(raw).get("error", "unknown")
+                log.warning("HF error: %s", err[:200])
+                return None
+            log.info("HF image: %d bytes", len(raw))
+            img = Image.open(io.BytesIO(raw))
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=90)
+            return buf.getvalue()
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()[:200]
+        if e.code == 503:
+            log.info("HF model loading (503), fallback to Pillow")
+        else:
+            log.warning("HF HTTP %d: %s", e.code, body)
+    except Exception as e:
+        log.debug("HF image error: %s", e)
+    return None
 
 
 def _gemini(prompt):
@@ -189,7 +252,11 @@ def generate(channel, slot="default"):
 
 
 def _make_image(prompt, channel="ai"):
-    log.info("generating image from prompt: %s", prompt[:60])
+    log.info("generating image from prompt: %s", prompt[:80])
+    hf = _hf_image(prompt)
+    if hf is not None:
+        return hf
+    log.info("falling back to Pillow gradient")
     W, H = 1024, 768
     if channel == "ai":
         c1, c2 = (20, 30, 60), (40, 60, 120)
@@ -219,7 +286,7 @@ def _make_image(prompt, channel="ai"):
             buf = io.BytesIO()
             img.save(buf, format="JPEG", quality=85)
             return buf.getvalue()
-    text = prompt[:120]
+    text = _strip_emojis(prompt[:120])
     lines = []
     for line in text.split("\n"):
         if draw.textlength(line, font=font) > W - 40:
