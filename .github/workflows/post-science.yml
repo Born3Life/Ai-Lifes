@@ -25,4 +25,5 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install Pillow
+      - run: python -c "import socket; [print(h, socket.getaddrinfo(h, 443)[0][4]) for h in ['api-inference.huggingface.co','router.huggingface.co','huggingface.co','googleapis.com']]"
       - run: python neuro.py --channel science
