@@ -218,6 +218,24 @@ def _hf_image(prompt: str) -> bytes | None:
     return None
 
 
+def _pollinations_image(prompt: str) -> bytes | None:
+    url = "https://image.pollinations.ai/prompt/" + urllib.parse.quote(prompt[:200])
+    try:
+        with urllib.request.urlopen(url, timeout=30, context=CTX) as r:
+            raw = r.read()
+            img = Image.open(io.BytesIO(raw))
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=90)
+            result = buf.getvalue()
+            log.info("Pollinations: %d bytes", len(result))
+            return result
+    except Exception as e:
+        log.warning("Pollinations fail: %s", e)
+    return None
+
+
 def _gemini(prompt, max_tokens=2048):
     key = _env("NG_GEMINI_KEY")
     if not key:
@@ -275,6 +293,9 @@ def _make_image(prompt, channel="ai"):
     hf = _hf_image(prompt)
     if hf is not None:
         return hf
+    poll = _pollinations_image(prompt)
+    if poll is not None:
+        return poll
     log.info("falling back to Pillow gradient")
     W, H = 1024, 768
     if channel == "ai":
