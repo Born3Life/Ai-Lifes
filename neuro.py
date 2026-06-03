@@ -229,10 +229,8 @@ def _gemini_image(prompt: str) -> bytes | None:
             url = ("https://generativelanguage.googleapis.com/v1beta/"
                    "models/{}:generateContent?key={}").format(model, key)
             payload = {
-                "contents": [{"parts": [{"text": "Generate image: " + prompt[:200}]}],
-                "generationConfig": {
-                    "temperature": 0.4, "candidateCount": 1,
-                },
+                "contents": [{"parts": [{"text": "Generate image: " + prompt[:200]}]}],
+                "generationConfig": {"temperature": 0.4, "candidateCount": 1},
             }
             data = _post(url, payload, {"Content-Type": "application/json"}, timeout=30)
             if data is None:
