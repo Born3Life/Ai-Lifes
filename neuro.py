@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import base64
 import io
 import json
 import logging
@@ -220,56 +219,16 @@ def _hf_image(prompt: str) -> bytes | None:
     return None
 
 
-def _gemini_image(prompt: str) -> bytes | None:
-    key = _env("NG_GEMINI_KEY")
-    if not key:
-        return None
-    for model in ["gemini-2.0-flash-exp-image-generation", "gemini-2.0-flash"]:
-        for _ in range(2):
-            url = ("https://generativelanguage.googleapis.com/v1beta/"
-                   "models/{}:generateContent?key={}").format(model, key)
-            payload = {
-                "contents": [{"parts": [{"text": "Generate image: " + prompt[:200]}]}],
-                "generationConfig": {"temperature": 0.4, "candidateCount": 1},
-            }
-            data = _post(url, payload, {"Content-Type": "application/json"}, timeout=30)
-            if data is None:
-                time.sleep(5)
-                continue
-            try:
-                parts = data["candidates"][0]["content"]["parts"]
-                for part in parts:
-                    if "inlineData" in part and part["inlineData"].get("mimeType", "").startswith("image/"):
-                        img_b64 = part["inlineData"]["data"]
-                        raw = base64.b64decode(img_b64)
-                        img = Image.open(io.BytesIO(raw))
-                        if img.mode != "RGB":
-                            img = img.convert("RGB")
-                        buf = io.BytesIO()
-                        img.save(buf, format="JPEG", quality=90)
-                        result = buf.getvalue()
-                        log.info("Gemini image: %d bytes", len(result))
-                        return result
-                log.warning("Gemini image: no image in response")
-            except (KeyError, IndexError) as e:
-                log.warning("Gemini image parse error: %s", e)
-        break
-    return None
-
-
 def _pollinations_image(prompt: str) -> bytes | None:
     q = urllib.parse.quote(prompt[:100])
-    for url in [
-        f"https://image.pollinations.ai/prompt/{q}?width=1024&height=768&nologo=true&seed=42&safe=false",
-        f"https://image.pollinations.ai/prompt/{q}",
-    ]:
+    url = f"https://image.pollinations.ai/prompt/{q}?width=1024&height=768&nologo=true&seed=42&safe=false"
+    for attempt in range(3):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", "Accept": "image/webp,*/*"})
-            with urllib.request.urlopen(req, timeout=20, context=CTX) as r:
-                ct = r.headers.get("Content-Type", "")
+            with urllib.request.urlopen(req, timeout=30, context=CTX) as r:
                 raw = r.read()
                 if not raw or len(raw) < 1000:
-                    log.warning("Pollinations: too small response (%d bytes)", len(raw) if raw else 0)
+                    log.warning("Pollinations: too small (%d)", len(raw) if raw else 0)
                     continue
                 img = Image.open(io.BytesIO(raw))
                 if img.mode != "RGB":
@@ -280,9 +239,16 @@ def _pollinations_image(prompt: str) -> bytes | None:
                 log.info("Pollinations: %d bytes", len(result))
                 return result
         except urllib.error.HTTPError as e:
-            log.warning("Pollinations HTTP %d: %s", e.code, e.read().decode()[:100])
+            body = e.read().decode()[:100]
+            if e.code == 402 and attempt < 2:
+                log.info("Pollinations queue full, retrying in 15s...")
+                time.sleep(15)
+                continue
+            log.warning("Pollinations HTTP %d: %s", e.code, body)
+            break
         except Exception as e:
             log.warning("Pollinations fail: %s", e)
+            break
     return None
 
 
@@ -346,9 +312,6 @@ def _make_image(prompt, channel="ai"):
     poll = _pollinations_image(prompt)
     if poll is not None:
         return poll
-    gem = _gemini_image(prompt)
-    if gem is not None:
-        return gem
     log.info("all image providers failed, returning None (text-only)")
     return None
 
