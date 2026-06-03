@@ -181,7 +181,7 @@ def _hf_image(prompt: str) -> bytes | None:
     if not token:
         log.info("NG_HF_TOKEN not set, skipping HF image")
         return None
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json", "User-Agent": "Mozilla/5.0"}
     payload = {"inputs": prompt, "parameters": {}, "options": {"wait_for_model": True}}
     models = [
         "black-forest-labs/FLUX.1-schnell",
@@ -192,6 +192,7 @@ def _hf_image(prompt: str) -> bytes | None:
     for m in models:
         urls.append(f"https://router.huggingface.co/hf-inference/models/{m}")
         urls.append(f"https://api-inference.huggingface.co/models/{m}")
+        urls.append(f"https://api-inference.hf.co/models/{m}")
     for url in urls:
         for attempt in range(3):
             try:
