@@ -200,7 +200,7 @@ def _hf_image(prompt: str) -> bytes | None:
         else:
             log.warning("HF HTTP %d: %s", e.code, body)
     except Exception as e:
-        log.debug("HF image error: %s", e)
+        log.warning("HF image error: %s", e)
     return None
 
 
