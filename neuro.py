@@ -412,7 +412,7 @@ def vk_publish(channel, text, image_data=None):
     if image_data:
         att = _vk_upload(channel, group, image_data)
         if att == "link":
-            attach.append("https://picsum.photos/1024/768")
+            text += "\n\n📷 https://picsum.photos/1024/768"
         elif att:
             attach.append(att)
     params = {"owner_id": owner, "message": text, "access_token": token, "v": "5.199"}
