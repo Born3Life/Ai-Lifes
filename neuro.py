@@ -219,6 +219,25 @@ def _hf_image(prompt: str) -> bytes | None:
     return None
 
 
+def _random_photo(prompt: str) -> bytes | None:
+    for url in ["https://picsum.photos/1024/768", "https://picsum.photos/1024/768?grayscale"]:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=15, context=CTX) as r:
+                raw = r.read()
+                img = Image.open(io.BytesIO(raw))
+                if img.mode != "RGB":
+                    img = img.convert("RGB")
+                buf = io.BytesIO()
+                img.save(buf, format="JPEG", quality=85)
+                result = buf.getvalue()
+                log.info("Random photo: %d bytes", len(result))
+                return result
+        except Exception as e:
+            log.warning("Random photo fail: %s", e)
+    return None
+
+
 def _pollinations_image(prompt: str) -> bytes | None:
     q = urllib.parse.quote(prompt[:100])
     url = f"https://image.pollinations.ai/prompt/{q}?width=1024&height=768&nologo=true&seed=42&safe=false"
@@ -312,8 +331,8 @@ def _make_image(prompt, channel="ai"):
     hf = _hf_image(prompt)
     if hf is not None:
         return hf
-    log.info("all image providers failed, returning None (text-only)")
-    return None
+    log.info("all AI image providers failed, trying random photo")
+    return _random_photo(prompt)
 
 
 def tg_publish(channel, text, image_data=None):
