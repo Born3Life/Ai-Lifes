@@ -181,7 +181,7 @@ def _hf_image(prompt: str) -> bytes | None:
         "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell",
     ]
     for url in urls:
-        for attempt in range(2):
+        for attempt in range(3):
             try:
                 req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers, method="POST")
                 with urllib.request.urlopen(req, timeout=90, context=CTX) as r:
@@ -199,11 +199,15 @@ def _hf_image(prompt: str) -> bytes | None:
                 if e.code == 503:
                     log.info("HF model loading (503), fallback to Pillow")
                     return None
+                if e.code == 500 and attempt < 2:
+                    log.info("HF 500 (attempt %d), retrying in %ds...", attempt + 1, (attempt + 1) * 5)
+                    time.sleep((attempt + 1) * 5)
+                    continue
                 log.warning("HF HTTP %d (%s): %s", e.code, url.split("/")[2], body)
+                break
             except Exception as e:
                 log.warning("HF error %s: %s", url.split("/")[2], e)
-            if attempt == 0:
-                time.sleep(3)
+                break
     return None
 
 
