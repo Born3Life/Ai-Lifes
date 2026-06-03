@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import base64
 import io
 import json
 import logging
@@ -181,23 +182,21 @@ def _hf_image(prompt: str) -> bytes | None:
     if not token:
         log.info("NG_HF_TOKEN not set, skipping HF image")
         return None
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json", "User-Agent": "Mozilla/5.0"}
-    payload = {"inputs": prompt, "parameters": {}, "options": {"wait_for_model": True}}
+    headers = {"Authorization": f"Bearer {token}"}
+    payload = {"inputs": prompt, "options": {"wait_for_model": True}}
     models = [
         "black-forest-labs/FLUX.1-schnell",
         "stabilityai/stable-diffusion-3.5-large",
-        "runwayml/stable-diffusion-v1-5",
     ]
     urls = []
     for m in models:
         urls.append(f"https://router.huggingface.co/hf-inference/models/{m}")
         urls.append(f"https://api-inference.huggingface.co/models/{m}")
-        urls.append(f"https://api-inference.hf.co/models/{m}")
     for url in urls:
-        for attempt in range(3):
+        for attempt in range(2):
             try:
                 req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers, method="POST")
-                with urllib.request.urlopen(req, timeout=90, context=CTX) as r:
+                with urllib.request.urlopen(req, timeout=60, context=CTX) as r:
                     raw = r.read()
                     img = Image.open(io.BytesIO(raw))
                     if img.mode != "RGB":
@@ -209,12 +208,9 @@ def _hf_image(prompt: str) -> bytes | None:
                     return result
             except urllib.error.HTTPError as e:
                 body = e.read().decode()[:200]
-                if e.code == 503:
-                    log.info("HF model loading (503), fallback to Pillow")
-                    return None
-                if e.code == 500 and attempt < 2:
-                    log.info("HF 500 (attempt %d), retrying in %ds...", attempt + 1, (attempt + 1) * 5)
-                    time.sleep((attempt + 1) * 5)
+                if e.code == 500 and attempt == 0:
+                    log.info("HF 500, retrying...")
+                    time.sleep(5)
                     continue
                 log.warning("HF HTTP %d (%s): %s", e.code, url.split("/")[2], body)
                 break
@@ -224,23 +220,71 @@ def _hf_image(prompt: str) -> bytes | None:
     return None
 
 
+def _gemini_image(prompt: str) -> bytes | None:
+    key = _env("NG_GEMINI_KEY")
+    if not key:
+        return None
+    for model in ["gemini-2.0-flash-exp-image-generation", "gemini-2.0-flash"]:
+        for _ in range(2):
+            url = ("https://generativelanguage.googleapis.com/v1beta/"
+                   "models/{}:generateContent?key={}").format(model, key)
+            payload = {
+                "contents": [{"parts": [{"text": "Generate image: " + prompt[:200}]}],
+                "generationConfig": {
+                    "temperature": 0.4, "candidateCount": 1,
+                },
+            }
+            data = _post(url, payload, {"Content-Type": "application/json"}, timeout=30)
+            if data is None:
+                time.sleep(5)
+                continue
+            try:
+                parts = data["candidates"][0]["content"]["parts"]
+                for part in parts:
+                    if "inlineData" in part and part["inlineData"].get("mimeType", "").startswith("image/"):
+                        img_b64 = part["inlineData"]["data"]
+                        raw = base64.b64decode(img_b64)
+                        img = Image.open(io.BytesIO(raw))
+                        if img.mode != "RGB":
+                            img = img.convert("RGB")
+                        buf = io.BytesIO()
+                        img.save(buf, format="JPEG", quality=90)
+                        result = buf.getvalue()
+                        log.info("Gemini image: %d bytes", len(result))
+                        return result
+                log.warning("Gemini image: no image in response")
+            except (KeyError, IndexError) as e:
+                log.warning("Gemini image parse error: %s", e)
+        break
+    return None
+
+
 def _pollinations_image(prompt: str) -> bytes | None:
     q = urllib.parse.quote(prompt[:100])
-    try:
-        req = urllib.request.Request(f"https://source.unsplash.com/random/1024x768/?{q.replace('%20', ',')}",
-                                     headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=15, context=CTX) as r:
-            raw = r.read()
-            img = Image.open(io.BytesIO(raw))
-            if img.mode != "RGB":
-                img = img.convert("RGB")
-            buf = io.BytesIO()
-            img.save(buf, format="JPEG", quality=90)
-            result = buf.getvalue()
-            log.info("Unsplash: %d bytes", len(result))
-            return result
-    except Exception as e:
-        log.warning("Unsplash fail: %s", e)
+    for url in [
+        f"https://image.pollinations.ai/prompt/{q}?width=1024&height=768&nologo=true&seed=42&safe=false",
+        f"https://image.pollinations.ai/prompt/{q}",
+    ]:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", "Accept": "image/webp,*/*"})
+            with urllib.request.urlopen(req, timeout=20, context=CTX) as r:
+                ct = r.headers.get("Content-Type", "")
+                raw = r.read()
+                if not raw or len(raw) < 1000:
+                    log.warning("Pollinations: too small response (%d bytes)", len(raw) if raw else 0)
+                    continue
+                img = Image.open(io.BytesIO(raw))
+                if img.mode != "RGB":
+                    img = img.convert("RGB")
+                buf = io.BytesIO()
+                img.save(buf, format="JPEG", quality=90)
+                result = buf.getvalue()
+                log.info("Pollinations: %d bytes", len(result))
+                return result
+        except urllib.error.HTTPError as e:
+            log.warning("Pollinations HTTP %d: %s", e.code, e.read().decode()[:100])
+        except Exception as e:
+            log.warning("Pollinations fail: %s", e)
     return None
 
 
@@ -304,6 +348,9 @@ def _make_image(prompt, channel="ai"):
     poll = _pollinations_image(prompt)
     if poll is not None:
         return poll
+    gem = _gemini_image(prompt)
+    if gem is not None:
+        return gem
     log.info("all image providers failed, returning None (text-only)")
     return None
 
