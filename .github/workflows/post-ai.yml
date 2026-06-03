@@ -21,6 +21,11 @@ jobs:
       NG_HF_TOKEN: ${{ secrets.NG_HF_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: history_ai.json
+          key: neuro-history-ai
+          save-always: true
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
