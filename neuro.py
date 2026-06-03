@@ -368,9 +368,11 @@ def _vk_upload(channel, group, image_data):
                + urllib.parse.urlencode({"group_id": group, "access_token": token, "v": "5.199"}))
         with urllib.request.urlopen(url, timeout=15, context=CTX) as r:
             resp = json.loads(r.read().decode())
+        if "error" in resp:
+            log.warning("VK upload: %s", resp["error"].get("error_msg", str(resp["error"])[:100]))
+            return "link"
         upload_url = resp.get("response", {}).get("upload_url")
         if not upload_url:
-            log.warning("VK upload: no upload_url, resp=%s", str(resp)[:200])
             return None
         boundary = "----vk789"
         h = ('Content-Disposition: form-data; name="photo"; filename="img.jpg"\r\n'
@@ -394,7 +396,7 @@ def _vk_upload(channel, group, image_data):
         items = save.get("response", [])
         if items:
             return "photo{}_{}".format(items[0]["owner_id"], items[0]["id"])
-        log.warning("VK upload: saveWallPhoto returned empty, save=%s", str(save)[:200])
+        log.warning("VK upload: saveWallPhoto empty, save=%s", str(save)[:200])
     except Exception as e:
         log.warning("VK upload fail: %s", e)
     return None
@@ -409,7 +411,9 @@ def vk_publish(channel, text, image_data=None):
     attach = []
     if image_data:
         att = _vk_upload(channel, group, image_data)
-        if att:
+        if att == "link":
+            attach.append("https://picsum.photos/1024/768")
+        elif att:
             attach.append(att)
     params = {"owner_id": owner, "message": text, "access_token": token, "v": "5.199"}
     if attach:
