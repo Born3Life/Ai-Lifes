@@ -176,28 +176,34 @@ def _hf_image(prompt: str) -> bytes | None:
         return None
     headers = {"Authorization": f"Bearer {token}"}
     payload = {"inputs": prompt}
-    req = urllib.request.Request(
+    urls = [
         "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell",
-        data=json.dumps(payload).encode(), headers=headers, method="POST")
-    try:
-        with urllib.request.urlopen(req, timeout=90, context=CTX) as r:
-            raw = r.read()
-            img = Image.open(io.BytesIO(raw))
-            if img.mode != "RGB":
-                img = img.convert("RGB")
-            buf = io.BytesIO()
-            img.save(buf, format="JPEG", quality=90)
-            result = buf.getvalue()
-            log.info("HF image: %d bytes", len(result))
-            return result
-    except urllib.error.HTTPError as e:
-        body = e.read().decode()[:200]
-        if e.code == 503:
-            log.info("HF model loading (503), fallback to Pillow")
-        else:
-            log.warning("HF HTTP %d: %s", e.code, body)
-    except Exception as e:
-        log.warning("HF image error: %s", e)
+        "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell",
+    ]
+    for url in urls:
+        for attempt in range(2):
+            try:
+                req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers, method="POST")
+                with urllib.request.urlopen(req, timeout=90, context=CTX) as r:
+                    raw = r.read()
+                    img = Image.open(io.BytesIO(raw))
+                    if img.mode != "RGB":
+                        img = img.convert("RGB")
+                    buf = io.BytesIO()
+                    img.save(buf, format="JPEG", quality=90)
+                    result = buf.getvalue()
+                    log.info("HF image: %d bytes", len(result))
+                    return result
+            except urllib.error.HTTPError as e:
+                body = e.read().decode()[:200]
+                if e.code == 503:
+                    log.info("HF model loading (503), fallback to Pillow")
+                    return None
+                log.warning("HF HTTP %d (%s): %s", e.code, url.split("/")[2], body)
+            except Exception as e:
+                log.warning("HF error %s: %s", url.split("/")[2], e)
+            if attempt == 0:
+                time.sleep(3)
     return None
 
 
