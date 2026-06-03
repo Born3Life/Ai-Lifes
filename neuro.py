@@ -118,7 +118,14 @@ FORMAT = (
     "7. Длина: 400-800 символов. Закончи мысль.\n"
     "8. Без хештегов.\n"
     "9. ЗАПРЕЩЕНО использовать символы ** для выделения текста. "
-    "Пиши обычным текстом, без Markdown."
+    "Пиши обычным текстом, без Markdown.\n"
+    "10. После текста поста, на отдельной строке, напиши ---IMG---\n"
+    "11. После ---IMG--- (на следующей строке) напиши промпт для генерации картинки "
+    "(на английском, для text-to-image модели FLUX.1-schnell, 4-10 слов, "
+    "только визуальное описание, без кавычек).\n"
+    "12. Пример: «Нейросети научились редактировать видео в реальном времени»\n"
+    "    ---IMG---\n"
+    "    neural network editing video feed in real time, futuristic UI hologram"
 )
 
 PROMPTS_AI = {
@@ -211,7 +218,7 @@ def _hf_image(prompt: str) -> bytes | None:
     return None
 
 
-def _gemini(prompt):
+def _gemini(prompt, max_tokens=2048):
     key = _env("NG_GEMINI_KEY")
     if not key:
         return None
@@ -220,7 +227,7 @@ def _gemini(prompt):
             url = ("https://generativelanguage.googleapis.com/v1beta/"
                    "models/{}:generateContent?key={}").format(model, key)
             payload = {"contents": [{"parts": [{"text": prompt}]}],
-                       "generationConfig": {"maxOutputTokens": 2048, "temperature": 0.85}}
+                       "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.85}}
             data = _post(url, payload, {"Content-Type": "application/json"}, timeout=60)
             if data is None:
                 time.sleep(5)
@@ -250,11 +257,16 @@ def generate(channel, slot="default"):
     news = _fetch_news(news_query)
     if news:
         prompt += "\n\nСвежие новости (используй как основу для поста):\n" + "\n".join(f"— {n}" for n in news)
-    text = _gemini(prompt)
-    if not text:
+    raw = _gemini(prompt, max_tokens=4096)
+    if not raw:
         return None, None
-    headline = text.split("\n")[0].strip()
-    img_prompt = "news " + headline[:60]
+    parts = raw.split("---IMG---", 1)
+    text = parts[0].strip()
+    if len(parts) > 1:
+        img_prompt = parts[1].strip().split("\n")[0].strip()
+    else:
+        headline = text.split("\n")[0].strip()
+        img_prompt = f"news photo of {headline[:80]}"
     return text, img_prompt
 
 
