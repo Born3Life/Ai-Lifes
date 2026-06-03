@@ -185,7 +185,8 @@ def _hf_image(prompt: str) -> bytes | None:
     payload = {"inputs": prompt, "parameters": {}, "options": {"wait_for_model": True}}
     models = [
         "black-forest-labs/FLUX.1-schnell",
-        "stabilityai/stable-diffusion-xl-base-1.0",
+        "stabilityai/stable-diffusion-3.5-large",
+        "runwayml/stable-diffusion-v1-5",
     ]
     urls = []
     for m in models:
