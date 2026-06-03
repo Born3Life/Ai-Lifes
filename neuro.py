@@ -183,11 +183,14 @@ def _hf_image(prompt: str) -> bytes | None:
         return None
     headers = {"Authorization": f"Bearer {token}"}
     payload = {"inputs": prompt, "parameters": {}, "options": {"wait_for_model": True}}
-    urls = [
-        "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell",
-        "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell",
-        "https://api-inference.hf.co/models/black-forest-labs/FLUX.1-schnell",
+    models = [
+        "black-forest-labs/FLUX.1-schnell",
+        "stabilityai/stable-diffusion-xl-base-1.0",
     ]
+    urls = []
+    for m in models:
+        urls.append(f"https://router.huggingface.co/hf-inference/models/{m}")
+        urls.append(f"https://api-inference.huggingface.co/models/{m}")
     for url in urls:
         for attempt in range(3):
             try:
