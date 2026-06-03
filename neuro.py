@@ -174,25 +174,22 @@ def _hf_image(prompt: str) -> bytes | None:
     if not token:
         log.info("NG_HF_TOKEN not set, skipping HF image")
         return None
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {token}"}
     payload = {"inputs": prompt}
     req = urllib.request.Request(
-        HF_IMAGE_URL, data=json.dumps(payload).encode(), headers=headers, method="POST")
+        "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell",
+        data=json.dumps(payload).encode(), headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=90, context=CTX) as r:
             raw = r.read()
-            ct = r.headers.get("Content-Type", "")
-            if ct.startswith("application/json"):
-                err = json.loads(raw).get("error", "unknown")
-                log.warning("HF error: %s", err[:200])
-                return None
-            log.info("HF image: %d bytes", len(raw))
             img = Image.open(io.BytesIO(raw))
             if img.mode != "RGB":
                 img = img.convert("RGB")
             buf = io.BytesIO()
             img.save(buf, format="JPEG", quality=90)
-            return buf.getvalue()
+            result = buf.getvalue()
+            log.info("HF image: %d bytes", len(result))
+            return result
     except urllib.error.HTTPError as e:
         body = e.read().decode()[:200]
         if e.code == 503:
