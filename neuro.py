@@ -182,10 +182,11 @@ def _hf_image(prompt: str) -> bytes | None:
         log.info("NG_HF_TOKEN not set, skipping HF image")
         return None
     headers = {"Authorization": f"Bearer {token}"}
-    payload = {"inputs": prompt}
+    payload = {"inputs": prompt, "parameters": {}, "options": {"wait_for_model": True}}
     urls = [
         "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell",
         "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell",
+        "https://api-inference.hf.co/models/black-forest-labs/FLUX.1-schnell",
     ]
     for url in urls:
         for attempt in range(3):
@@ -219,9 +220,11 @@ def _hf_image(prompt: str) -> bytes | None:
 
 
 def _pollinations_image(prompt: str) -> bytes | None:
-    url = "https://image.pollinations.ai/prompt/" + urllib.parse.quote(prompt[:200])
+    q = urllib.parse.quote(prompt[:100])
     try:
-        with urllib.request.urlopen(url, timeout=30, context=CTX) as r:
+        req = urllib.request.Request(f"https://source.unsplash.com/random/1024x768/?{q.replace('%20', ',')}",
+                                     headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=15, context=CTX) as r:
             raw = r.read()
             img = Image.open(io.BytesIO(raw))
             if img.mode != "RGB":
@@ -229,10 +232,10 @@ def _pollinations_image(prompt: str) -> bytes | None:
             buf = io.BytesIO()
             img.save(buf, format="JPEG", quality=90)
             result = buf.getvalue()
-            log.info("Pollinations: %d bytes", len(result))
+            log.info("Unsplash: %d bytes", len(result))
             return result
     except Exception as e:
-        log.warning("Pollinations fail: %s", e)
+        log.warning("Unsplash fail: %s", e)
     return None
 
 
@@ -296,64 +299,8 @@ def _make_image(prompt, channel="ai"):
     poll = _pollinations_image(prompt)
     if poll is not None:
         return poll
-    log.info("falling back to Pillow gradient")
-    W, H = 1024, 768
-    if channel == "ai":
-        c1, c2 = (20, 30, 60), (40, 60, 120)
-    else:
-        c1, c2 = (20, 60, 40), (40, 120, 80)
-    img = Image.new("RGB", (W, H), c1)
-    draw = ImageDraw.Draw(img)
-    for y in range(H):
-        r = int(c1[0] + (c2[0] - c1[0]) * y / H)
-        g = int(c1[1] + (c2[1] - c1[1]) * y / H)
-        b = int(c1[2] + (c2[2] - c1[2]) * y / H)
-        draw.line([(0, y), (W, y)], fill=(r, g, b))
-    bar_h = int(H * 0.30)
-    overlay = Image.new("RGBA", (W, bar_h), (255, 255, 255, 220))
-    img.paste(overlay, (0, 0), overlay)
-    font = None
-    for size in range(40, 18, -2):
-        try:
-            font = ImageFont.truetype(FONT_PATH, size)
-            break
-        except OSError:
-            continue
-    if not font:
-        try:
-            font = ImageFont.load_default()
-        except Exception:
-            buf = io.BytesIO()
-            img.save(buf, format="JPEG", quality=85)
-            return buf.getvalue()
-    text = _strip_emojis(prompt[:120])
-    lines = []
-    for line in text.split("\n"):
-        if draw.textlength(line, font=font) > W - 40:
-            words = line.split()
-            cur = ""
-            for w in words:
-                test = (cur + " " + w).strip()
-                if draw.textlength(test, font=font) > W - 40:
-                    lines.append(cur)
-                    cur = w
-                else:
-                    cur = test
-            if cur:
-                lines.append(cur)
-        else:
-            lines.append(line)
-    y = (bar_h - len(lines) * (size + 4)) // 2 + 4
-    for line in lines:
-        tw = draw.textlength(line, font=font)
-        x = (W - tw) // 2
-        draw.text((x, y), line, font=font, fill=(20, 20, 20))
-        y += size + 4
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG", quality=90)
-    result = buf.getvalue()
-    log.info("image done: %d bytes, %dx%d", len(result), W, H)
-    return result
+    log.info("all image providers failed, returning None (text-only)")
+    return None
 
 
 def tg_publish(channel, text, image_data=None):
@@ -383,6 +330,7 @@ def _vk_upload(channel, group, image_data):
     try:
         token = (_env("NG_VK_TOKEN") if channel == "ai" else _env("NG_VK_TOKEN_SCIENCE")).strip()
         if not token:
+            log.warning("VK upload: no token for %s", channel)
             return None
         url = ("https://api.vk.com/method/photos.getWallUploadServer?"
                + urllib.parse.urlencode({"group_id": group, "access_token": token, "v": "5.199"}))
@@ -390,6 +338,7 @@ def _vk_upload(channel, group, image_data):
             resp = json.loads(r.read().decode())
         upload_url = resp.get("response", {}).get("upload_url")
         if not upload_url:
+            log.warning("VK upload: no upload_url, resp=%s", str(resp)[:200])
             return None
         boundary = "----vk789"
         h = ('Content-Disposition: form-data; name="photo"; filename="img.jpg"\r\n'
@@ -413,6 +362,7 @@ def _vk_upload(channel, group, image_data):
         items = save.get("response", [])
         if items:
             return "photo{}_{}".format(items[0]["owner_id"], items[0]["id"])
+        log.warning("VK upload: saveWallPhoto returned empty, save=%s", str(save)[:200])
     except Exception as e:
         log.warning("VK upload fail: %s", e)
     return None
