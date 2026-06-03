@@ -222,14 +222,14 @@ def _hf_image(prompt: str) -> bytes | None:
 def _pollinations_image(prompt: str) -> bytes | None:
     q = urllib.parse.quote(prompt[:100])
     url = f"https://image.pollinations.ai/prompt/{q}?width=1024&height=768&nologo=true&seed=42&safe=false"
-    for attempt in range(3):
+    for attempt in range(2):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", "Accept": "image/webp,*/*"})
-            with urllib.request.urlopen(req, timeout=30, context=CTX) as r:
+            with urllib.request.urlopen(req, timeout=60, context=CTX) as r:
                 raw = r.read()
                 if not raw or len(raw) < 1000:
                     log.warning("Pollinations: too small (%d)", len(raw) if raw else 0)
-                    continue
+                    return None
                 img = Image.open(io.BytesIO(raw))
                 if img.mode != "RGB":
                     img = img.convert("RGB")
@@ -240,9 +240,9 @@ def _pollinations_image(prompt: str) -> bytes | None:
                 return result
         except urllib.error.HTTPError as e:
             body = e.read().decode()[:100]
-            if e.code == 402 and attempt < 2:
-                log.info("Pollinations queue full, retrying in 15s...")
-                time.sleep(15)
+            if e.code == 402 and attempt == 0:
+                log.info("Pollinations queue full, retrying in 60s...")
+                time.sleep(60)
                 continue
             log.warning("Pollinations HTTP %d: %s", e.code, body)
             break
@@ -306,12 +306,12 @@ def generate(channel, slot="default"):
 
 def _make_image(prompt, channel="ai"):
     log.info("generating image from prompt: %s", prompt[:80])
-    hf = _hf_image(prompt)
-    if hf is not None:
-        return hf
     poll = _pollinations_image(prompt)
     if poll is not None:
         return poll
+    hf = _hf_image(prompt)
+    if hf is not None:
+        return hf
     log.info("all image providers failed, returning None (text-only)")
     return None
 
