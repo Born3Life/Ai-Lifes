@@ -18,6 +18,7 @@ jobs:
       NG_TG_CHANNEL: ${{ secrets.NG_TG_CHANNEL }}
       NG_VK_TOKEN: ${{ secrets.NG_VK_TOKEN }}
       NG_VK_GROUP: ${{ secrets.NG_VK_GROUP }}
+      NG_HF_TOKEN: ${{ secrets.NG_HF_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
