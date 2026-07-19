@@ -43,10 +43,10 @@ _EMOJI_RE = re.compile(
     "]+", flags=re.UNICODE
 )
 
-HF_IMAGE_URL = "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell"
+VK_API_VERSION = "5.199"
 
 
-def _env(key, default=None):
+def _env(key: str, default: str | None = None) -> str | None:
     v = os.environ.get(key)
     if v:
         return v
@@ -59,7 +59,12 @@ def _env(key, default=None):
     return default
 
 
-def _post(url, data, headers=None, timeout=60):
+def _env_strip(key: str) -> str | None:
+    v = _env(key)
+    return v.strip() if v else None
+
+
+def _post(url: str, data: dict, headers: dict | None = None, timeout: int = 60) -> dict | None:
     body = json.dumps(data).encode()
     req = urllib.request.Request(url, data=body, headers=headers or {}, method="POST")
     try:
@@ -78,7 +83,7 @@ def _post(url, data, headers=None, timeout=60):
     return None
 
 
-def _multipart_post(url, fields, file_field, file_data, filename="img.jpg", timeout=60):
+def _multipart_post(url: str, fields: dict, file_field: str, file_data: bytes, filename: str = "img.jpg", timeout: int = 60) -> dict | None:
     boundary = "----boundary789"
     body = b""
     for k, v in fields.items():
@@ -121,7 +126,7 @@ FORMAT = (
     "Пиши обычным текстом, без Markdown.\n"
     "10. После текста поста, на отдельной строке, напиши ---IMG---\n"
     "11. После ---IMG--- (на следующей строке) напиши промпт для генерации картинки "
-    "(на английском, для text-to-image модели FLUX.1-schnell, 4-10 слов, "
+    "(на английском, для text-to-image модели, 4-10 слов, "
     "только визуальное описание, без кавычек).\n"
     "12. Пример: «Нейросети научились редактировать видео в реальном времени»\n"
     "    ---IMG---\n"
@@ -152,11 +157,9 @@ PROMPTS_SCIENCE = {
 }
 
 
-def _fetch_news(query):
-    url = ("https://news.google.com/rss/search?"
-           + urllib.parse.urlencode({"q": query, "hl": "ru", "gl": "RU", "tbs": "qdr:d"}))
-    items = []
-    seen = set()
+def _fetch_rss(url: str, max_items: int = 5) -> list[str]:
+    items: list[str] = []
+    seen: set[str] = set()
     try:
         with urllib.request.urlopen(url, timeout=15, context=CTX) as r:
             root = ET.fromstring(r.read())
@@ -165,11 +168,46 @@ def _fetch_news(query):
                 if title and title not in seen:
                     seen.add(title)
                     items.append(title)
-                    if len(items) >= 5:
+                    if len(items) >= max_items:
                         break
     except Exception as e:
-        log.debug("news fetch error: %s", e)
+        log.debug("RSS fetch error %s: %s", url[:50], e)
     return items
+
+
+def _fetch_news(query: str) -> list[str]:
+    url = ("https://news.google.com/rss/search?"
+           + urllib.parse.urlencode({"q": query, "hl": "ru", "gl": "RU", "tbs": "qdr:d"}))
+    return _fetch_rss(url)
+
+
+def _fetch_habr(tag: str = "AI") -> list[str]:
+    return _fetch_rss(f"https://habr.com/ru/rss/hub/{tag}/?fl=ru")
+
+
+def _fetch_tass() -> list[str]:
+    return _fetch_rss("https://tass.ru/rss/v2.xml")
+
+
+def _collect_news(news_query: str, channel: str) -> str:
+    sources: list[tuple[str, str]] = [
+        ("Google News", _fetch_news(news_query)),
+    ]
+
+    if channel == "ai":
+        sources.append(("Habr AI", _fetch_habr("artificial_intelligence")))
+        sources.append(("Habr ML", _fetch_habr("machine_learning")))
+        sources.append(("Habr DL", _fetch_habr("deep_learning")))
+    else:
+        sources.append(("Habr Science", _fetch_habr("science")))
+        sources.append(("TASS", _fetch_tass()))
+
+    result = ""
+    for name, items in sources:
+        if items:
+            result += f"\n— {name}:\n" + "\n".join(f"— {n}" for n in items)
+
+    return result.strip() or ""
 
 
 def _strip_emojis(text: str) -> str:
@@ -177,7 +215,7 @@ def _strip_emojis(text: str) -> str:
 
 
 def _hf_image(prompt: str) -> bytes | None:
-    token = _env("NG_HF_TOKEN")
+    token = _env_strip("NG_HF_TOKEN")
     if not token:
         log.info("NG_HF_TOKEN not set, skipping HF image")
         return None
@@ -271,8 +309,8 @@ def _pollinations_image(prompt: str) -> bytes | None:
     return None
 
 
-def _gemini(prompt, max_tokens=2048):
-    key = _env("NG_GEMINI_KEY")
+def _gemini(prompt: str, max_tokens: int = 2048) -> str | None:
+    key = _env_strip("NG_GEMINI_KEY")
     if not key:
         return None
     for model in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-001"]:
@@ -296,7 +334,7 @@ def _gemini(prompt, max_tokens=2048):
     return None
 
 
-def generate(channel, slot="default"):
+def generate(channel: str, slot: str = "default") -> tuple[str | None, str | None]:
     if channel == "ai":
         prompts = PROMPTS_AI
         news_query = "искусственный интеллект нейросети ChatGPT новости"
@@ -307,9 +345,11 @@ def generate(channel, slot="default"):
     ctx = _history_context(channel)
     if ctx:
         prompt += ctx
-    news = _fetch_news(news_query)
+
+    news = _collect_news(news_query, channel)
     if news:
-        prompt += "\n\nСвежие новости (используй как основу для поста):\n" + "\n".join(f"— {n}" for n in news)
+        prompt += "\n\nСвежие новости (используй как основу для поста):\n" + news
+
     raw = _gemini(prompt, max_tokens=4096)
     if not raw:
         return None, None
@@ -323,21 +363,21 @@ def generate(channel, slot="default"):
     return text, img_prompt
 
 
-def _make_image(prompt, channel="ai"):
+def _make_image(prompt: str, channel: str = "ai") -> bytes | None:
     log.info("generating image from prompt: %s", prompt[:80])
-    poll = _pollinations_image(prompt)
-    if poll is not None:
-        return poll
     hf = _hf_image(prompt)
     if hf is not None:
         return hf
+    poll = _pollinations_image(prompt)
+    if poll is not None:
+        return poll
     log.info("all AI image providers failed, trying random photo")
     return _random_photo(prompt)
 
 
-def tg_publish(channel, text, image_data=None):
-    token = (_env("NG_TG_TOKEN") if channel == "ai" else _env("NG_TG_TOKEN_SCIENCE")).strip()
-    chat = (_env("NG_TG_CHANNEL") if channel == "ai" else _env("NG_TG_CHANNEL_SCIENCE")).strip()
+def tg_publish(channel: str, text: str, image_data: bytes | None = None) -> bool:
+    token = _env_strip("NG_TG_TOKEN") if channel == "ai" else _env_strip("NG_TG_TOKEN_SCIENCE")
+    chat = _env_strip("NG_TG_CHANNEL") if channel == "ai" else _env_strip("NG_TG_CHANNEL_SCIENCE")
     if not token or not chat:
         log.error("no TG config for %s", channel)
         return False
@@ -358,22 +398,26 @@ def tg_publish(channel, text, image_data=None):
     log.error("TG fail"); return False
 
 
-def _vk_upload(channel, group, image_data):
+def _vk_upload(channel: str, group: str, image_data: bytes) -> str | None:
     try:
-        token = (_env("NG_VK_TOKEN") if channel == "ai" else _env("NG_VK_TOKEN_SCIENCE")).strip()
+        token = _env_strip("NG_VK_TOKEN") if channel == "ai" else _env_strip("NG_VK_TOKEN_SCIENCE")
         if not token:
             log.warning("VK upload: no token for %s", channel)
             return None
+
         url = ("https://api.vk.com/method/photos.getWallUploadServer?"
-               + urllib.parse.urlencode({"group_id": group, "access_token": token, "v": "5.199"}))
+               + urllib.parse.urlencode({"group_id": group, "access_token": token, "v": VK_API_VERSION}))
         with urllib.request.urlopen(url, timeout=15, context=CTX) as r:
             resp = json.loads(r.read().decode())
         if "error" in resp:
-            log.warning("VK upload: %s", resp["error"].get("error_msg", str(resp["error"])[:100]))
-            return "link"
+            log.warning("VK getWallUploadServer error: %s",
+                        resp["error"].get("error_msg", str(resp["error"])[:100]))
+            return None
         upload_url = resp.get("response", {}).get("upload_url")
         if not upload_url:
+            log.warning("VK upload: no upload_url in response")
             return None
+
         boundary = "----vk789"
         h = ('Content-Disposition: form-data; name="photo"; filename="img.jpg"\r\n'
              'Content-Type: image/jpeg\r\n\r\n').encode("utf-8")
@@ -384,15 +428,22 @@ def _vk_upload(channel, group, image_data):
                                      method="POST")
         with urllib.request.urlopen(req, timeout=30, context=CTX) as r:
             upload = json.loads(r.read().decode())
+
         save_url = ("https://api.vk.com/method/photos.saveWallPhoto?"
                     + urllib.parse.urlencode({"group_id": group,
                                               "server": upload.get("server"),
                                               "photo": upload.get("photo"),
                                               "hash": upload.get("hash"),
                                               "access_token": token,
-                                              "v": "5.199"}))
+                                              "v": VK_API_VERSION}))
         with urllib.request.urlopen(save_url, timeout=15, context=CTX) as r:
             save = json.loads(r.read().decode())
+
+        if "error" in save:
+            log.warning("VK saveWallPhoto error: %s",
+                        save["error"].get("error_msg", str(save["error"])[:100]))
+            return None
+
         items = save.get("response", [])
         if items:
             return "photo{}_{}".format(items[0]["owner_id"], items[0]["id"])
@@ -402,28 +453,38 @@ def _vk_upload(channel, group, image_data):
     return None
 
 
-def vk_publish(channel, text, image_data=None):
-    token = (_env("NG_VK_TOKEN") if channel == "ai" else _env("NG_VK_TOKEN_SCIENCE")).strip()
-    group = (_env("NG_VK_GROUP") if channel == "ai" else _env("NG_VK_GROUP_SCIENCE")).strip()
+def vk_publish(channel: str, text: str, image_data: bytes | None = None) -> bool:
+    token = _env_strip("NG_VK_TOKEN") if channel == "ai" else _env_strip("NG_VK_TOKEN_SCIENCE")
+    group = _env_strip("NG_VK_GROUP") if channel == "ai" else _env_strip("NG_VK_GROUP_SCIENCE")
     if not token or not group:
-        log.error("no VK config for %s", channel); return False
+        log.error("no VK config for %s", channel)
+        return False
     owner = -abs(int(group))
-    attach = []
+    attach: list[str] = []
     if image_data:
         att = _vk_upload(channel, group, image_data)
-        if att == "link":
-            text += "\n\n📷 https://picsum.photos/1024/768"
-        elif att:
+        if att:
             attach.append(att)
-    params = {"owner_id": owner, "message": text, "access_token": token, "v": "5.199"}
+    params = {
+        "owner_id": owner,
+        "from_group": 1,
+        "message": text,
+        "access_token": token,
+        "v": VK_API_VERSION,
+    }
     if attach:
         params["attachments"] = ",".join(attach)
     body = urllib.parse.urlencode(params).encode()
     req = urllib.request.Request("https://api.vk.com/method/wall.post", data=body, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=30, context=CTX) as r:
-            if "error" not in json.loads(r.read().decode()):
-                log.info("VK OK"); return True
+            resp = json.loads(r.read().decode())
+            if "error" in resp:
+                log.error("VK wall.post error: %s",
+                          resp["error"].get("error_msg", str(resp["error"])[:100]))
+                return False
+            log.info("VK OK")
+            return True
     except Exception as e:
         log.error("VK fail: %s", e)
     return False
@@ -432,24 +493,24 @@ def vk_publish(channel, text, image_data=None):
 HISTORY_DIR = Path(__file__).parent
 
 
-def _history_path(channel):
+def _history_path(channel: str) -> Path:
     return HISTORY_DIR / f"history_{channel}.json"
 
 
-def _load_history(channel):
+def _load_history(channel: str) -> list[str]:
     p = _history_path(channel)
     if p.exists():
         return json.loads(p.read_text(encoding="utf-8"))
     return []
 
 
-def _save_history(channel, text):
+def _save_history(channel: str, text: str) -> None:
     h = _load_history(channel)
     h.append(text)
     _history_path(channel).write_text(json.dumps(h[-10:], ensure_ascii=False), encoding="utf-8")
 
 
-def _history_context(channel):
+def _history_context(channel: str) -> str:
     h = _load_history(channel)
     if not h:
         return ""
@@ -458,7 +519,7 @@ def _history_context(channel):
     )
 
 
-def run_once(channel, slot="default"):
+def run_once(channel: str, slot: str = "default") -> None:
     log.info("channel=%s slot=%s", channel, slot)
     text, img_prompt = generate(channel, slot)
     if not text:
@@ -472,7 +533,7 @@ def run_once(channel, slot="default"):
     log.info("%s done: TG=%s VK=%s", channel, tg_r, vk_r)
 
 
-def main():
+def main() -> None:
     channel = "ai"
     slot = "default"
     if "--channel" in sys.argv:
