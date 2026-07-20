@@ -34,18 +34,38 @@ SCHEDULE: dict[str, dict[str, int]] = {
 }
 
 
-class HealthHandler(BaseHTTPRequestHandler):
+class TriggerHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
-        self.send_response(200)
+        path = self.path.rstrip("/")
+        if path in ("/health", ""):
+            self._respond(200, "ok\n")
+        elif path == "/trigger/ai":
+            self._run_and_respond("ai", "afternoon")
+        elif path == "/trigger/science":
+            self._run_and_respond("science", "afternoon")
+        else:
+            self._respond(404, "not found\n")
+
+    def _respond(self, code: int, body: str) -> None:
+        self.send_response(code)
         self.end_headers()
-        self.wfile.write(b"ok")
+        self.wfile.write(body.encode())
+
+    def _run_and_respond(self, channel: str, slot: str) -> None:
+        logger.info("manual trigger %s/%s", channel, slot)
+        try:
+            neuro_run(channel=channel, slot=slot)
+            self._respond(200, f"{channel}/{slot} done\n")
+        except Exception as exc:
+            logger.exception("trigger failed")
+            self._respond(500, f"error: {exc}\n")
 
     def log_message(self, format: str, *args: object) -> None:
         pass
 
 
 def _health_server(port: int) -> None:
-    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    server = HTTPServer(("0.0.0.0", port), TriggerHandler)
     logger.info("health server on port %d", port)
     server.serve_forever()
 
