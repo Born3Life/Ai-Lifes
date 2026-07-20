@@ -191,29 +191,6 @@ def _fetch_marktechpost() -> list[str]:
     return _fetch_rss("https://www.marktechpost.com/feed/")
 
 
-def _collect_news(news_query: str, channel: str) -> str:
-    sources: list[tuple[str, str]] = [
-        ("Google News", _fetch_news(news_query)),
-    ]
-
-    if channel == "ai":
-        sources.append(("Habr AI", _fetch_habr("artificial_intelligence")))
-        sources.append(("Habr ML", _fetch_habr("machine_learning")))
-        sources.append(("Habr DL", _fetch_habr("deep_learning")))
-        sources.append(("MarkTechPost", _fetch_marktechpost()))
-    else:
-        sources.append(("Habr Science", _fetch_habr("science")))
-        sources.append(("TASS", _fetch_tass()))
-        sources.append(("N+1", _fetch_nplus1()))
-
-    result = ""
-    for name, items in sources:
-        if items:
-            result += f"\n— {name}:\n" + "\n".join(f"— {n}" for n in items)
-
-    return result.strip() or ""
-
-
 def _strip_emojis(text: str) -> str:
     return _EMOJI_RE.sub("", text).strip()
 
@@ -599,6 +576,10 @@ def _history_path(channel: str) -> Path:
     return HISTORY_DIR / f"history_{channel}.json"
 
 
+def _used_rss_path(channel: str) -> Path:
+    return HISTORY_DIR / f"used_rss_{channel}.json"
+
+
 def _load_history(channel: str) -> list[str]:
     p = _history_path(channel)
     if p.exists():
@@ -609,15 +590,75 @@ def _load_history(channel: str) -> list[str]:
 def _save_history(channel: str, text: str) -> None:
     h = _load_history(channel)
     h.append(text)
-    _history_path(channel).write_text(json.dumps(h[-10:], ensure_ascii=False), encoding="utf-8")
+    _history_path(channel).write_text(json.dumps(h[-20:], ensure_ascii=False), encoding="utf-8")
+
+
+def _load_used_rss(channel: str) -> list[str]:
+    p = _used_rss_path(channel)
+    if p.exists():
+        return json.loads(p.read_text(encoding="utf-8"))
+    return []
+
+
+def _save_used_rss(channel: str, titles: list[str]) -> None:
+    old = _load_used_rss(channel)
+    old.extend(titles)
+    _used_rss_path(channel).write_text(json.dumps(old[-50:], ensure_ascii=False), encoding="utf-8")
+
+
+def _words(text: str) -> set[str]:
+    return set(w.lower().strip(",.!?«»\"'()[]-") for w in text.split() if len(w) > 3)
+
+
+def _similar_to_used(title: str, used: list[str]) -> bool:
+    tw = _words(title)
+    if not tw:
+        return False
+    for u in used:
+        uw = _words(u)
+        if not uw:
+            continue
+        overlap = len(tw & uw) / max(len(tw), len(uw))
+        if overlap > 0.4:
+            return True
+    return False
+
+
+def _collect_news(news_query: str, channel: str) -> str:
+    sources: list[tuple[str, str]] = [
+        ("Google News", _fetch_news(news_query)),
+    ]
+
+    if channel == "ai":
+        sources.append(("Habr AI", _fetch_habr("artificial_intelligence")))
+        sources.append(("Habr ML", _fetch_habr("machine_learning")))
+        sources.append(("Habr DL", _fetch_habr("deep_learning")))
+        sources.append(("MarkTechPost", _fetch_marktechpost()))
+    else:
+        sources.append(("Habr Science", _fetch_habr("science")))
+        sources.append(("TASS", _fetch_tass()))
+        sources.append(("N+1", _fetch_nplus1()))
+
+    used = _load_used_rss(channel)
+    all_titles: list[str] = []
+    result = ""
+    for name, items in sources:
+        filtered = [n for n in items if not _similar_to_used(n, used)]
+        if filtered:
+            result += f"\n— {name}:\n" + "\n".join(f"— {n}" for n in filtered)
+            all_titles.extend(filtered[:3])
+
+    if all_titles:
+        _save_used_rss(channel, all_titles)
+    return result.strip() or ""
 
 
 def _history_context(channel: str) -> str:
     h = _load_history(channel)
     if not h:
         return ""
-    return "\n\nНЕ повторяй темы этих предыдущих постов:\n" + "\n".join(
-        f"— {p.split(chr(10))[0][:60]}" for p in h[-10:]
+    return "\n\nКатегорически НЕ повторяй темы этих предыдущих постов. Выбери другую:\n" + "\n".join(
+        f"— {p.split(chr(10))[0][:80]}" for p in h[-15:]
     )
 
 
