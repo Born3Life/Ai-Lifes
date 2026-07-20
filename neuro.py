@@ -555,7 +555,7 @@ def _vk_upload(channel: str, group: str, image_data: bytes) -> str | None:
     return None
 
 
-def vk_publish(channel: str, text: str, image_data: bytes | None = None) -> bool:
+def vk_publish(channel: str, text: str, image_data: bytes | None = None, image_url: str | None = None) -> bool:
     token = _env_strip("NG_VK_TOKEN") if channel == "ai" else _env_strip("NG_VK_TOKEN_SCIENCE")
     group = _env_strip("NG_VK_GROUP") if channel == "ai" else _env_strip("NG_VK_GROUP_SCIENCE")
     if not token or not group:
@@ -567,6 +567,9 @@ def vk_publish(channel: str, text: str, image_data: bytes | None = None) -> bool
         att = _vk_upload(channel, group, image_data)
         if att:
             attach.append(att)
+    if not attach and image_url:
+        log.info("VK using image URL fallback: %s", image_url[:60])
+        attach.append(image_url)
     params = {
         "owner_id": owner,
         "from_group": 1,
@@ -636,9 +639,14 @@ def run_once(channel: str, slot: str = "default") -> None:
         img_raw = _make_image(img_prompt, channel)
         log.info("img_raw: %s", "OK" if img_raw else "NONE")
 
+        img_url = None
+        if img_prompt:
+            q = urllib.parse.quote(img_prompt[:100])
+            img_url = f"https://image.pollinations.ai/prompt/{q}?width=1024&height=768&nologo=true&seed=42&safe=false"
+
         _save_history(channel, text)
         tg_r = tg_publish(channel, text, img_raw)
-        vk_r = vk_publish(channel, text, img_raw)
+        vk_r = vk_publish(channel, text, img_raw, image_url=img_url)
         log.info("%s done: TG=%s VK=%s", channel, tg_r, vk_r)
     except Exception:
         log.exception("run_once failed")
