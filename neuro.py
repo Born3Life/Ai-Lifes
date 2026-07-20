@@ -350,9 +350,11 @@ def _openrouter(prompt: str, max_tokens: int = 2048) -> str | None:
         )
         if data and isinstance(data, dict):
             try:
-                text = data["choices"][0]["message"]["content"].strip()
-                log.info("OpenRouter %s OK (%d chars)", model, len(text))
-                return text
+                content = data["choices"][0]["message"]["content"]
+                if content and content.strip():
+                    text = content.strip()
+                    log.info("OpenRouter %s OK (%d chars)", model, len(text))
+                    return text
             except (KeyError, IndexError):
                 continue
     return None
@@ -375,9 +377,11 @@ def _deepseek(prompt: str, max_tokens: int = 2048) -> str | None:
     )
     if data and isinstance(data, dict):
         try:
-            text = data["choices"][0]["message"]["content"].strip()
-            log.info("DeepSeek OK (%d chars)", len(text))
-            return text
+            content = data["choices"][0]["message"]["content"]
+            if content and content.strip():
+                text = content.strip()
+                log.info("DeepSeek OK (%d chars)", len(text))
+                return text
         except (KeyError, IndexError):
             pass
     return None
@@ -619,23 +623,25 @@ def _history_context(channel: str) -> str:
 
 def run_once(channel: str, slot: str = "default") -> None:
     log.info("channel=%s slot=%s", channel, slot)
+    try:
+        text = generate(channel, slot)
+        if not text:
+            log.error("generate failed")
+            return
+        log.info("post text: %d chars", len(text))
 
-    text = generate(channel, slot)
-    if not text:
-        log.error("generate failed")
-        return
-    log.info("post text: %d chars", len(text))
+        img_prompt = _generate_image_prompt(text)
+        log.info("image prompt: %s", img_prompt[:80])
 
-    img_prompt = _generate_image_prompt(text)
-    log.info("image prompt: %s", img_prompt[:80])
+        img_raw = _make_image(img_prompt, channel)
+        log.info("img_raw: %s", "OK" if img_raw else "NONE")
 
-    img_raw = _make_image(img_prompt, channel)
-    log.info("img_raw: %s", "OK" if img_raw else "NONE")
-
-    _save_history(channel, text)
-    tg_r = tg_publish(channel, text, img_raw)
-    vk_r = vk_publish(channel, text, img_raw)
-    log.info("%s done: TG=%s VK=%s", channel, tg_r, vk_r)
+        _save_history(channel, text)
+        tg_r = tg_publish(channel, text, img_raw)
+        vk_r = vk_publish(channel, text, img_raw)
+        log.info("%s done: TG=%s VK=%s", channel, tg_r, vk_r)
+    except Exception:
+        log.exception("run_once failed")
 
 
 def main() -> None:
