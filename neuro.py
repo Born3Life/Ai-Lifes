@@ -338,6 +338,45 @@ def _gemini(prompt: str, max_tokens: int = 2048) -> str | None:
     return None
 
 
+def _openrouter(prompt: str, max_tokens: int = 2048) -> str | None:
+    key = _env_strip("OPENROUTER_API_KEY")
+    if not key:
+        return None
+    models = [
+        "openai/gpt-4o-mini",
+        "deepseek/deepseek-v4-flash:free",
+        "openrouter/free",
+    ]
+    for model in models:
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens,
+        }
+        data = _post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            payload,
+            {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            timeout=90,
+        )
+        if data and isinstance(data, dict):
+            try:
+                text = data["choices"][0]["message"]["content"].strip()
+                log.info("OpenRouter %s OK (%d chars)", model, len(text))
+                return text
+            except (KeyError, IndexError):
+                continue
+    return None
+
+
+def _ask(prompt: str, max_tokens: int = 2048) -> str | None:
+    r = _gemini(prompt, max_tokens)
+    if r:
+        return r
+    log.info("Gemini failed, trying OpenRouter")
+    return _openrouter(prompt, max_tokens)
+
+
 def generate(channel: str, slot: str = "default") -> str | None:
     if channel == "ai":
         prompts = PROMPTS_AI
@@ -354,7 +393,7 @@ def generate(channel: str, slot: str = "default") -> str | None:
     if news:
         prompt += "\n\nСвежие новости (используй как основу для поста):\n" + news
 
-    raw = _gemini(prompt, max_tokens=4096)
+    raw = _ask(prompt, max_tokens=4096)
     if not raw:
         return None
     text = raw.strip()
@@ -369,7 +408,7 @@ def _generate_image_prompt(post_text: str) -> str:
         "(4-10 words, no quotes, no labels, just visual elements) "
         "for an AI image generator:\n\n" + post_text[:500]
     )
-    result = _gemini(prompt, max_tokens=100)
+    result = _ask(prompt, max_tokens=100)
     if result:
         clean = result.strip().strip("\"'")
         log.info("image prompt: %s", clean)
