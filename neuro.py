@@ -229,15 +229,13 @@ def _hf_image(prompt: str) -> bytes | None:
         "black-forest-labs/FLUX.1-schnell",
         "stabilityai/stable-diffusion-3.5-large",
     ]
-    urls = []
     for m in models:
-        urls.append(f"https://router.huggingface.co/hf-inference/models/{m}")
-        urls.append(f"https://api-inference.huggingface.co/models/{m}")
-    for url in urls:
-        for attempt in range(2):
+        for prefix in ("https://router.huggingface.co/hf-inference/models/",
+                       "https://api-inference.huggingface.co/models/"):
+            url = prefix + m
             try:
                 req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers, method="POST")
-                with urllib.request.urlopen(req, timeout=60, context=CTX) as r:
+                with urllib.request.urlopen(req, timeout=15, context=CTX) as r:
                     raw = r.read()
                     img = Image.open(io.BytesIO(raw))
                     if img.mode != "RGB":
@@ -248,16 +246,9 @@ def _hf_image(prompt: str) -> bytes | None:
                     log.info("HF image: %d bytes", len(result))
                     return result
             except urllib.error.HTTPError as e:
-                body = e.read().decode()[:200]
-                if e.code == 500 and attempt == 0:
-                    log.info("HF 500, retrying...")
-                    time.sleep(5)
-                    continue
-                log.warning("HF HTTP %d (%s): %s", e.code, url.split("/")[2], body)
-                break
+                log.warning("HF HTTP %d (%s): %s", e.code, m, e.read().decode()[:100])
             except Exception as e:
-                log.warning("HF error %s: %s", url.split("/")[2], e)
-                break
+                log.warning("HF error %s: %s", m, e)
     return None
 
 
@@ -318,23 +309,21 @@ def _gemini(prompt: str, max_tokens: int = 2048) -> str | None:
     if not key:
         return None
     for model in ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-001"]:
-        for _ in range(3):
-            url = ("https://generativelanguage.googleapis.com/v1beta/"
-                   "models/{}:generateContent?key={}").format(model, key)
-            payload = {"contents": [{"parts": [{"text": prompt}]}],
-                       "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.85}}
-            data = _post(url, payload, {"Content-Type": "application/json"}, timeout=60)
-            if data is None:
-                time.sleep(5)
-                continue
-            try:
-                cand = data["candidates"][0]
-                text = cand["content"]["parts"][0]["text"].strip()
-                reason = cand.get("finishReason", "?")
-                log.info("Gemini: %d chars, finish=%s", len(text), reason)
-                return text
-            except (KeyError, IndexError):
-                break
+        url = ("https://generativelanguage.googleapis.com/v1beta/"
+               "models/{}:generateContent?key={}").format(model, key)
+        payload = {"contents": [{"parts": [{"text": prompt}]}],
+                   "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.85}}
+        data = _post(url, payload, {"Content-Type": "application/json"}, timeout=20)
+        if data is None:
+            continue
+        try:
+            cand = data["candidates"][0]
+            text = cand["content"]["parts"][0]["text"].strip()
+            reason = cand.get("finishReason", "?")
+            log.info("Gemini: %d chars, finish=%s", len(text), reason)
+            return text
+        except (KeyError, IndexError):
+            break
     return None
 
 
@@ -357,7 +346,7 @@ def _openrouter(prompt: str, max_tokens: int = 2048) -> str | None:
             "https://openrouter.ai/api/v1/chat/completions",
             payload,
             {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            timeout=90,
+            timeout=30,
         )
         if data and isinstance(data, dict):
             try:
@@ -382,7 +371,7 @@ def _deepseek(prompt: str, max_tokens: int = 2048) -> str | None:
         "https://api.deepseek.com/chat/completions",
         payload,
         {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-        timeout=60,
+        timeout=30,
     )
     if data and isinstance(data, dict):
         try:
@@ -469,8 +458,8 @@ def _verify_image(data: bytes | None) -> bytes | None:
 def _make_image(prompt: str, channel: str = "ai") -> bytes | None:
     log.info("generating image from prompt: %s", prompt[:80])
     providers = [
-        ("HF", _hf_image(prompt)),
         ("Pollinations", _pollinations_image(prompt)),
+        ("HF", _hf_image(prompt)),
     ]
     for name, data in providers:
         if data:
