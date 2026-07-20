@@ -512,8 +512,8 @@ def _vk_upload(channel: str, group: str, image_data: bytes) -> str | None:
         with urllib.request.urlopen(url, timeout=15, context=CTX) as r:
             resp = json.loads(r.read().decode())
         if "error" in resp:
-            log.warning("VK getWallUploadServer error: %s",
-                        resp["error"].get("error_msg", str(resp["error"])[:100]))
+            msg = resp["error"].get("error_msg", str(resp["error"])[:100])
+            log.warning("VK upload photo need USER token (not group). %s", msg)
             return None
         upload_url = resp.get("response", {}).get("upload_url")
         if not upload_url:
