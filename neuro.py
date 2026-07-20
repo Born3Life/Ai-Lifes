@@ -369,11 +369,40 @@ def _openrouter(prompt: str, max_tokens: int = 2048) -> str | None:
     return None
 
 
+def _deepseek(prompt: str, max_tokens: int = 2048) -> str | None:
+    key = _env_strip("DEEPSEEK_API_KEY")
+    if not key:
+        return None
+    payload = {
+        "model": "deepseek-chat",
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": max_tokens,
+    }
+    data = _post(
+        "https://api.deepseek.com/chat/completions",
+        payload,
+        {"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        timeout=60,
+    )
+    if data and isinstance(data, dict):
+        try:
+            text = data["choices"][0]["message"]["content"].strip()
+            log.info("DeepSeek OK (%d chars)", len(text))
+            return text
+        except (KeyError, IndexError):
+            pass
+    return None
+
+
 def _ask(prompt: str, max_tokens: int = 2048) -> str | None:
     r = _gemini(prompt, max_tokens)
     if r:
         return r
-    log.info("Gemini failed, trying OpenRouter")
+    log.info("Gemini failed, trying DeepSeek")
+    r = _deepseek(prompt, max_tokens)
+    if r:
+        return r
+    log.info("DeepSeek failed, trying OpenRouter")
     return _openrouter(prompt, max_tokens)
 
 

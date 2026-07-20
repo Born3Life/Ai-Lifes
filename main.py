@@ -24,12 +24,12 @@ STATE_PATH = Path(__file__).parent / "state.json"
 
 SCHEDULE: dict[str, dict[str, int]] = {
     "ai": {
-        "afternoon": 14,
+        "afternoon": 12,
         "evening": 20,
     },
     "science": {
-        "afternoon": 14,
-        "evening": 20,
+        "morning": 10,
+        "evening": 18,
     },
 }
 
