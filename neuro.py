@@ -124,13 +124,7 @@ FORMAT = (
     "8. Без хештегов.\n"
     "9. ЗАПРЕЩЕНО использовать символы ** для выделения текста. "
     "Пиши обычным текстом, без Markdown.\n"
-    "10. После текста поста, на отдельной строке, напиши ---IMG---\n"
-    "11. После ---IMG--- (на следующей строке) напиши промпт для генерации картинки "
-    "(на английском, для text-to-image модели, 4-10 слов, "
-    "только визуальное описание, без кавычек).\n"
-    "12. Пример: «Нейросети научились редактировать видео в реальном времени»\n"
-    "    ---IMG---\n"
-    "    neural network editing video feed in real time, futuristic UI hologram"
+    "10. В конце напиши строку --END-- после текста."
 )
 
 PROMPTS_AI = {
@@ -189,6 +183,14 @@ def _fetch_tass() -> list[str]:
     return _fetch_rss("https://tass.ru/rss/v2.xml")
 
 
+def _fetch_nplus1() -> list[str]:
+    return _fetch_rss("https://nplus1.ru/rss")
+
+
+def _fetch_marktechpost() -> list[str]:
+    return _fetch_rss("https://www.marktechpost.com/feed/")
+
+
 def _collect_news(news_query: str, channel: str) -> str:
     sources: list[tuple[str, str]] = [
         ("Google News", _fetch_news(news_query)),
@@ -198,9 +200,11 @@ def _collect_news(news_query: str, channel: str) -> str:
         sources.append(("Habr AI", _fetch_habr("artificial_intelligence")))
         sources.append(("Habr ML", _fetch_habr("machine_learning")))
         sources.append(("Habr DL", _fetch_habr("deep_learning")))
+        sources.append(("MarkTechPost", _fetch_marktechpost()))
     else:
         sources.append(("Habr Science", _fetch_habr("science")))
         sources.append(("TASS", _fetch_tass()))
+        sources.append(("N+1", _fetch_nplus1()))
 
     result = ""
     for name, items in sources:
@@ -334,7 +338,7 @@ def _gemini(prompt: str, max_tokens: int = 2048) -> str | None:
     return None
 
 
-def generate(channel: str, slot: str = "default") -> tuple[str | None, str | None]:
+def generate(channel: str, slot: str = "default") -> str | None:
     if channel == "ai":
         prompts = PROMPTS_AI
         news_query = "искусственный интеллект нейросети ChatGPT новости"
@@ -352,27 +356,64 @@ def generate(channel: str, slot: str = "default") -> tuple[str | None, str | Non
 
     raw = _gemini(prompt, max_tokens=4096)
     if not raw:
-        return None, None
-    parts = raw.split("---IMG---", 1)
-    text = parts[0].strip()
-    if len(parts) > 1:
-        img_prompt = parts[1].strip().split("\n")[0].strip()
-    else:
-        headline = text.split("\n")[0].strip()
-        img_prompt = f"news photo of {headline[:80]}"
-    return text, img_prompt
+        return None
+    text = raw.strip()
+    if text.endswith("--END--"):
+        text = text[:-7].strip()
+    return text
+
+
+def _generate_image_prompt(post_text: str) -> str:
+    prompt = (
+        "Based on this news post, write a SHORT visual description in English "
+        "(4-10 words, no quotes, no labels, just visual elements) "
+        "for an AI image generator:\n\n" + post_text[:500]
+    )
+    result = _gemini(prompt, max_tokens=100)
+    if result:
+        clean = result.strip().strip("\"'")
+        log.info("image prompt: %s", clean)
+        return clean
+    headline = post_text.split("\n")[0][:60]
+    fallback = f"news illustration of {headline}"
+    log.info("image prompt fallback: %s", fallback)
+    return fallback
+
+
+def _verify_image(data: bytes | None) -> bytes | None:
+    if data is None or len(data) < 5000:
+        log.warning("image too small or empty (%s), skipping", len(data) if data else 0)
+        return None
+    try:
+        img = Image.open(io.BytesIO(data))
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        extrema = img.getextrema()
+        if extrema and all(mn == mx for mn, mx in extrema):
+            log.warning("image is a solid color, skipping")
+            return None
+        return data
+    except Exception as e:
+        log.warning("image verify failed: %s", e)
+        return None
 
 
 def _make_image(prompt: str, channel: str = "ai") -> bytes | None:
     log.info("generating image from prompt: %s", prompt[:80])
-    hf = _hf_image(prompt)
-    if hf is not None:
-        return hf
-    poll = _pollinations_image(prompt)
-    if poll is not None:
-        return poll
+    providers = [
+        ("HF", _hf_image(prompt)),
+        ("Pollinations", _pollinations_image(prompt)),
+    ]
+    for name, data in providers:
+        if data:
+            verified = _verify_image(data)
+            if verified:
+                log.info("%s image OK (%d bytes)", name, len(verified))
+                return verified
+            log.warning("%s image failed verification", name)
     log.info("all AI image providers failed, trying random photo")
-    return _random_photo(prompt)
+    rand = _random_photo(prompt)
+    return _verify_image(rand)
 
 
 def tg_publish(channel: str, text: str, image_data: bytes | None = None) -> bool:
@@ -521,12 +562,19 @@ def _history_context(channel: str) -> str:
 
 def run_once(channel: str, slot: str = "default") -> None:
     log.info("channel=%s slot=%s", channel, slot)
-    text, img_prompt = generate(channel, slot)
+
+    text = generate(channel, slot)
     if not text:
-        log.error("generate failed"); return
+        log.error("generate failed")
+        return
     log.info("post text: %d chars", len(text))
+
+    img_prompt = _generate_image_prompt(text)
+    log.info("image prompt: %s", img_prompt[:80])
+
     img_raw = _make_image(img_prompt, channel)
     log.info("img_raw: %s", "OK" if img_raw else "NONE")
+
     _save_history(channel, text)
     tg_r = tg_publish(channel, text, img_raw)
     vk_r = vk_publish(channel, text, img_raw)
