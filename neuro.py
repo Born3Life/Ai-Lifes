@@ -532,7 +532,33 @@ def _vk_upload(channel: str, group: str, image_data: bytes) -> str | None:
     return None
 
 
-def vk_publish(channel: str, text: str, image_data: bytes | None = None, image_url: str | None = None) -> bool:
+def _upload_to_hosting(image_data: bytes) -> str | None:
+    """Upload image to 0x0.st (free no-registration file host)."""
+    boundary = "----boundary123"
+    body = (
+        b"--" + boundary.encode() + b"\r\n"
+        b'Content-Disposition: form-data; name="file"; filename="img.jpg"\r\n'
+        b"Content-Type: image/jpeg\r\n\r\n" + image_data +
+        b"\r\n--" + boundary.encode() + b"--\r\n"
+    )
+    for url in ("https://0x0.st", "https://envs.sh"):
+        try:
+            req = urllib.request.Request(
+                url, data=body,
+                headers={"Content-Type": "multipart/form-data; boundary=" + boundary},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=30, context=CTX) as r:
+                result = r.read().decode().strip()
+                if result:
+                    log.info("uploaded to %s: %s", url, result[:60])
+                    return result
+        except Exception as e:
+            log.warning("upload to %s fail: %s", url, e)
+    return None
+
+
+def vk_publish(channel: str, text: str, image_data: bytes | None = None) -> bool:
     token = _env_strip("NG_VK_TOKEN") if channel == "ai" else _env_strip("NG_VK_TOKEN_SCIENCE")
     group = _env_strip("NG_VK_GROUP") if channel == "ai" else _env_strip("NG_VK_GROUP_SCIENCE")
     if not token or not group:
@@ -544,6 +570,10 @@ def vk_publish(channel: str, text: str, image_data: bytes | None = None, image_u
         att = _vk_upload(channel, group, image_data)
         if att:
             attach.append(att)
+        else:
+            img_url = _upload_to_hosting(image_data)
+            if img_url:
+                attach.append(img_url)
     params = {
         "owner_id": owner,
         "from_group": 1,
