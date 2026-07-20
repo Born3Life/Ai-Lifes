@@ -40,9 +40,13 @@ class TriggerHandler(BaseHTTPRequestHandler):
         if path in ("/health", ""):
             self._respond(200, "ok\n")
         elif path == "/trigger/ai":
-            self._run_and_respond("ai", "afternoon")
+            self._respond(200, "started\n")
+            t = threading.Thread(target=neuro_run, args=("ai", "afternoon"), daemon=True)
+            t.start()
         elif path == "/trigger/science":
-            self._run_and_respond("science", "afternoon")
+            self._respond(200, "started\n")
+            t = threading.Thread(target=neuro_run, args=("science", "afternoon"), daemon=True)
+            t.start()
         else:
             self._respond(404, "not found\n")
 
@@ -50,15 +54,6 @@ class TriggerHandler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.end_headers()
         self.wfile.write(body.encode())
-
-    def _run_and_respond(self, channel: str, slot: str) -> None:
-        logger.info("manual trigger %s/%s", channel, slot)
-        try:
-            neuro_run(channel=channel, slot=slot)
-            self._respond(200, f"{channel}/{slot} done\n")
-        except Exception as exc:
-            logger.exception("trigger failed")
-            self._respond(500, f"error: {exc}\n")
 
     def log_message(self, format: str, *args: object) -> None:
         pass
