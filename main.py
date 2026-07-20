@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Entry point for Render: health server + scheduler loop."""
+"""Entry point for Render: health server + scheduler loop for AI & Science channels."""
 from __future__ import annotations
 
 import json
@@ -16,19 +16,22 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent / ".env")
 
 from neuro import run_once as neuro_run
-from content_generator import generate as cg_generate
-from tg_publisher import publish as tg_publish
-from vk_publisher import publish as vk_publish
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s")
 logger = logging.getLogger("main")
 
 STATE_PATH = Path(__file__).parent / "state.json"
 
-SCHEDULE: dict[str, int] = {
-    "morning": 9,
-    "afternoon": 14,
-    "evening": 20,
+SCHEDULE: dict[str, dict[str, int]] = {
+    "ai": {
+        "morning": 9,
+        "afternoon": 14,
+        "evening": 20,
+    },
+    "science": {
+        "afternoon": 14,
+        "evening": 20,
+    },
 }
 
 
@@ -66,24 +69,20 @@ def _today() -> str:
     return datetime.utcnow().strftime("%Y-%m-%d")
 
 
-def _should_post(slot: str, state: dict) -> bool:
+def _should_post(channel: str, slot: str, state: dict) -> bool:
     today = _today()
-    posted = state.get(today, {})
+    posted = state.get(today, {}).get(channel, {})
     return not posted.get(slot, False)
 
 
-def _mark_posted(slot: str, state: dict) -> None:
+def _mark_posted(channel: str, slot: str, state: dict) -> None:
     today = _today()
     if today not in state:
         state[today] = {}
-    state[today][slot] = True
+    if channel not in state[today]:
+        state[today][channel] = {}
+    state[today][channel][slot] = True
     _save_state(state)
-
-
-def _run_slot(slot: str) -> None:
-    logger.info("generating %s post via neuro.py", slot)
-    neuro_run(channel="ai", slot=slot)
-    _mark_posted(slot, _load_state())
 
 
 def _scheduler_loop() -> None:
@@ -91,9 +90,12 @@ def _scheduler_loop() -> None:
     while True:
         hour = _now_hour()
         state = _load_state()
-        for slot, scheduled_hour in SCHEDULE.items():
-            if hour == scheduled_hour and _should_post(slot, state):
-                _run_slot(slot)
+        for channel, slots in SCHEDULE.items():
+            for slot, scheduled_hour in slots.items():
+                if hour == scheduled_hour and _should_post(channel, slot, state):
+                    logger.info("generating %s/%s post", channel, slot)
+                    neuro_run(channel=channel, slot=slot)
+                    _mark_posted(channel, slot, _load_state())
         time.sleep(60)
 
 
