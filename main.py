@@ -35,6 +35,31 @@ SCHEDULE: dict[str, dict[str, int]] = {
 
 
 class TriggerHandler(BaseHTTPRequestHandler):
+    VK_AUTH_HTML = r"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>VK Auth</title></head><body><div id="app"></div>
+<script>
+(function(){
+  var app=document.getElementById('app');
+  var h=window.location.hash.substring(1);
+  if(h){
+    var p=new URLSearchParams(h),t=p.get('access_token');
+    if(t){app.innerHTML='<h2>OK!</h2><textarea style="width:100%;height:60px">'+t+'</textarea><p>Скопируй токен</p>';return}
+  }
+  var q=new URLSearchParams(window.location.search),c=q.get('code');
+  if(c){app.innerHTML='<h2>Code: '+c+'</h2><p>Скопируй код</p>';return}
+  var s=document.createElement('script');
+  s.src='https://unpkg.com/@vkid/sdk@latest/dist/sdk.js';
+  s.onload=function(){
+    var VKID=window.VKID;
+    VKID.Config.init({appId:54686016,redirectUrl:window.location.href.split('?')[0].split('#')[0],
+      state:'vk',scope:'photos,wall,groups,offline',responseType:'token',mode:VKID.ConfigAuth.FLOAT});
+    new VKID.Auth().render({container:app,width:300})
+  };
+  document.head.appendChild(s)
+})();
+</script></body></html>"""
+
     def do_GET(self) -> None:
         path = self.path.rstrip("/")
         if path in ("/health", ""):
@@ -47,6 +72,11 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._respond(200, "started\n")
             t = threading.Thread(target=neuro_run, args=("science", "afternoon"), daemon=True)
             t.start()
+        elif path == "/vk-auth":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(self.VK_AUTH_HTML.encode("utf-8"))
         else:
             self._respond(404, "not found\n")
 
