@@ -151,8 +151,16 @@ PROMPTS_SCIENCE = {
 }
 
 
-def _fetch_rss(url: str, max_items: int = 5) -> list[str]:
-    items: list[str] = []
+def _parse_rss_date(dt_str: str) -> str:
+    try:
+        dt = datetime.strptime(dt_str.rsplit(" ", 1)[0], "%a, %d %b %Y %H:%M:%S")
+        return dt.strftime("%d.%m.%Y")
+    except Exception:
+        return dt_str[:10]
+
+
+def _fetch_rss(url: str, max_items: int = 5) -> list[dict]:
+    items: list[dict] = []
     seen: set[str] = set()
     try:
         with urllib.request.urlopen(url, timeout=15, context=CTX) as r:
@@ -161,7 +169,12 @@ def _fetch_rss(url: str, max_items: int = 5) -> list[str]:
                 title = item.findtext("title", "")
                 if title and title not in seen:
                     seen.add(title)
-                    items.append(title)
+                    pub = item.findtext("pubDate", "") or item.findtext("dc:date", "")
+                    items.append({
+                        "title": title,
+                        "date": _parse_rss_date(pub) if pub else "??",
+                        "source": url.split("/")[2] if "//" in url else url[:30],
+                    })
                     if len(items) >= max_items:
                         break
     except Exception as e:
@@ -169,25 +182,25 @@ def _fetch_rss(url: str, max_items: int = 5) -> list[str]:
     return items
 
 
-def _fetch_news(query: str) -> list[str]:
+def _fetch_news(query: str) -> list[dict]:
     url = ("https://news.google.com/rss/search?"
            + urllib.parse.urlencode({"q": query, "hl": "ru", "gl": "RU", "tbs": "qdr:d"}))
     return _fetch_rss(url)
 
 
-def _fetch_habr(tag: str = "AI") -> list[str]:
+def _fetch_habr(tag: str = "AI") -> list[dict]:
     return _fetch_rss(f"https://habr.com/ru/rss/hub/{tag}/?fl=ru")
 
 
-def _fetch_tass() -> list[str]:
+def _fetch_tass() -> list[dict]:
     return _fetch_rss("https://tass.ru/rss/v2.xml")
 
 
-def _fetch_nplus1() -> list[str]:
+def _fetch_nplus1() -> list[dict]:
     return _fetch_rss("https://nplus1.ru/rss")
 
 
-def _fetch_marktechpost() -> list[str]:
+def _fetch_marktechpost() -> list[dict]:
     return _fetch_rss("https://www.marktechpost.com/feed/")
 
 
@@ -390,7 +403,17 @@ def generate(channel: str, slot: str = "default") -> str | None:
 
     news = _collect_news(news_query, channel)
     if news:
-        prompt += "\n\nСвежие новости (используй как основу для поста):\n" + news
+        prompt += "\n\nДоступные темы (выбери ОДНУ самую интересную):\n" + news
+        prompt += (
+            "\n\nПрежде чем писать пост — коротко объясни (в 1-2 предложения), "
+            "почему ты выбрал именно эту тему: она новая, не повторяется с предыдущими постами, "
+            "актуальна для аудитории. Напиши это объяснение в скобках в начале ответа: [выбор: ...]"
+        )
+        if "ранее опубликованные" in news:
+            prompt += (
+                "\nТак как это новость из архива — обязательно укажи в посте дату: "
+                "«По данным от [дата]» или «Ещё [месяц назад] писали о...»."
+            )
 
     raw = _ask(prompt, max_tokens=4096)
     if not raw:
@@ -654,8 +677,34 @@ def _similar_to_used(title: str, used: list[str]) -> bool:
     return False
 
 
+def _rss_archive_path(channel: str) -> Path:
+    return HISTORY_DIR / f"rss_archive_{channel}.json"
+
+
+def _load_rss_archive(channel: str) -> list[dict]:
+    p = _rss_archive_path(channel)
+    if p.exists():
+        return json.loads(p.read_text(encoding="utf-8"))
+    return []
+
+
+def _save_rss_archive(channel: str, items: list[dict]) -> None:
+    old = _load_rss_archive(channel)
+    existing = {i["title"] for i in old}
+    new = [i for i in items if i["title"] not in existing]
+    if new:
+        old.extend(new)
+        _rss_archive_path(channel).write_text(
+            json.dumps(old[-200:], ensure_ascii=False), encoding="utf-8")
+
+
+def _format_news(items: list[dict]) -> str:
+    return "\n".join(
+        f"• [{i['date']}] [{i['source']}] {i['title']}" for i in items)
+
+
 def _collect_news(news_query: str, channel: str) -> str:
-    sources: list[tuple[str, str]] = [
+    sources: list[tuple[str, list[dict]]] = [
         ("Google News", _fetch_news(news_query)),
     ]
 
@@ -670,17 +719,27 @@ def _collect_news(news_query: str, channel: str) -> str:
         sources.append(("N+1", _fetch_nplus1()))
 
     used = _load_used_rss(channel)
-    all_titles: list[str] = []
-    result = ""
-    for name, items in sources:
-        filtered = [n for n in items if not _similar_to_used(n, used)]
-        if filtered:
-            result += f"\n— {name}:\n" + "\n".join(f"— {n}" for n in filtered)
-            all_titles.extend(filtered[:3])
+    fresh: list[dict] = []
+    all_items: list[dict] = []
+    for _name, items in sources:
+        all_items.extend(items)
+        for i in items:
+            if not _similar_to_used(i["title"], used):
+                fresh.append(i)
+    _save_rss_archive(channel, all_items)
 
-    if all_titles:
-        _save_used_rss(channel, all_titles)
-    return result.strip() or ""
+    if fresh:
+        _save_used_rss(channel, [i["title"] for i in fresh])
+        return "Свежие новости:\n" + _format_news(fresh)
+
+    archive = _load_rss_archive(channel)
+    unposted = [i for i in archive if not _similar_to_used(i["title"], used)]
+    if unposted:
+        picked = unposted[:3]
+        _save_used_rss(channel, [i["title"] for i in picked])
+        return "Нет свежих новостей. Используй ранее опубликованные (укажи дату):\n" + _format_news(picked)
+
+    return ""
 
 
 def _history_context(channel: str) -> str:
