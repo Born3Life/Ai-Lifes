@@ -7,6 +7,8 @@ import logging
 import os
 import threading
 import time
+import urllib.request
+import urllib.parse
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
@@ -41,14 +43,20 @@ class TriggerHandler(BaseHTTPRequestHandler):
 <script>
 (function(){
   var app=document.getElementById('app');
-  var h=window.location.hash.substring(1);
-  if(h){
-    var p=new URLSearchParams(h),t=p.get('access_token');
-    if(t){app.innerHTML='<h2>OK!</h2><textarea style="width:100%;height:60px;font-size:14px">'+t+'</textarea><p>Скопируй токен и отправь мне</p>';return}
+  var q=new URLSearchParams(window.location.search),code=q.get('code');
+  if(code){
+    app.innerHTML='<p>Обмениваю код на токен...</p>';
+    fetch('/vk-token-exchange?code='+encodeURIComponent(code))
+      .then(function(r){return r.text()})
+      .then(function(t){
+        if(t.startsWith('{')){var d=JSON.parse(t);app.innerHTML='<h2>Ошибка</h2><pre>'+d.error+'</pre>';return}
+        app.innerHTML='<h2>OK!</h2><textarea style="width:100%;height:60px;font-size:14px">'+t+'</textarea><p>Скопируй токен и отправь мне</p>'
+      });
+    return
   }
   var base=window.location.href.split('?')[0].split('#')[0];
   var url='https://oauth.vk.com/authorize?client_id=54686016&redirect_uri='+encodeURIComponent(base)
-    +'&scope=photos,wall,groups,offline&response_type=token&v=5.199&state=vk';
+    +'&scope=photos,wall,groups,offline&response_type=code&v=5.199&state=vk';
   app.innerHTML='<p style="margin-bottom:20px">Нажми кнопку, чтобы получить токен VK:</p>'
     +'<a href="'+url+'" style="display:inline-block;padding:14px 28px;background:#0077ff;color:#fff;'
     +'text-decoration:none;border-radius:8px;font-size:18px;font-weight:600">Разрешить VK</a>'
@@ -73,6 +81,27 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
             self.wfile.write(self.VK_AUTH_HTML.encode("utf-8"))
+        elif path.startswith("/vk-token-exchange"):
+            code = urllib.parse.parse_qs(path.split("?", 1)[1] if "?" in path else "").get("code", [""])[0]
+            if not code:
+                self._respond(400, "no code\n"); return
+            secret = os.environ.get("VK_CLIENT_SECRET", "iWTVKhquRjJN1OVWYlPJ")
+            data = urllib.parse.urlencode({
+                "client_id": 54686016, "client_secret": secret,
+                "redirect_uri": "https://ai-lifes-bot.onrender.com/vk-auth",
+                "code": code,
+            }).encode()
+            try:
+                req = urllib.request.Request("https://oauth.vk.com/access_token", data=data, method="POST")
+                with urllib.request.urlopen(req, timeout=15) as r:
+                    resp = json.loads(r.read().decode())
+                token = resp.get("access_token")
+                if token:
+                    self._respond(200, token + "\n")
+                else:
+                    self._respond(400, json.dumps(resp) + "\n")
+            except Exception as ex:
+                self._respond(500, str(ex) + "\n")
         else:
             self._respond(404, "not found\n")
 
