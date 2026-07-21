@@ -37,26 +37,22 @@ SCHEDULE: dict[str, dict[str, int]] = {
 class TriggerHandler(BaseHTTPRequestHandler):
     VK_AUTH_HTML = r"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>VK Auth</title></head><body><div id="app"></div>
+<title>VK Auth</title></head><body><div id="app"><p>Загрузка...</p></div>
 <script>
 (function(){
   var app=document.getElementById('app');
   var h=window.location.hash.substring(1);
   if(h){
     var p=new URLSearchParams(h),t=p.get('access_token');
-    if(t){app.innerHTML='<h2>OK!</h2><textarea style="width:100%;height:60px">'+t+'</textarea><p>Скопируй токен</p>';return}
+    if(t){app.innerHTML='<h2>OK!</h2><textarea style="width:100%;height:60px;font-size:14px">'+t+'</textarea><p>Скопируй токен и отправь мне</p>';return}
   }
-  var q=new URLSearchParams(window.location.search),c=q.get('code');
-  if(c){app.innerHTML='<h2>Code: '+c+'</h2><p>Скопируй код</p>';return}
-  var s=document.createElement('script');
-  s.src='https://unpkg.com/@vkid/sdk@latest/dist/sdk.js';
-  s.onload=function(){
-    var VKID=window.VKID;
-    VKID.Config.init({appId:54686016,redirectUrl:window.location.href.split('?')[0].split('#')[0],
-      state:'vk',scope:'photos,wall,groups,offline',responseType:'token',mode:VKID.ConfigAuth.FLOAT});
-    new VKID.Auth().render({container:app,width:300})
-  };
-  document.head.appendChild(s)
+  var base=window.location.href.split('?')[0].split('#')[0];
+  var url='https://oauth.vk.com/authorize?client_id=54686016&redirect_uri='+encodeURIComponent(base)
+    +'&scope=photos,wall,groups,offline&response_type=token&v=5.199&state=vk';
+  app.innerHTML='<p style="margin-bottom:20px">Нажми кнопку, чтобы получить токен VK:</p>'
+    +'<a href="'+url+'" style="display:inline-block;padding:14px 28px;background:#0077ff;color:#fff;'
+    +'text-decoration:none;border-radius:8px;font-size:18px;font-weight:600">Разрешить VK</a>'
+    +'<p style="margin-top:20px;color:#888;font-size:13px">Откроется страница VK &rarr; нажми Разрешить &rarr; вернёшься сюда с токеном</p>';
 })();
 </script></body></html>"""
 
