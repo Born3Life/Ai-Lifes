@@ -389,6 +389,46 @@ def _ask(prompt: str, max_tokens: int = 2048) -> str | None:
     return _openrouter(prompt, max_tokens)
 
 
+AGENTS_PATH = HISTORY_DIR / "AGENTS.md"
+
+
+def _load_agents() -> str:
+    if AGENTS_PATH.exists():
+        return AGENTS_PATH.read_text(encoding="utf-8")
+    return ""
+
+
+def _topics_log_path(channel: str) -> Path:
+    return HISTORY_DIR / f"topics_log_{channel}.json"
+
+
+def _load_topics_log(channel: str) -> list[dict]:
+    p = _topics_log_path(channel)
+    if p.exists():
+        return json.loads(p.read_text(encoding="utf-8"))
+    return []
+
+
+def _save_topics_log(channel: str, text: str) -> None:
+    title = text.split("\n")[0][:80]
+    words = [w.lower().strip(",.!?«»\"'()[]-") for w in title.split() if len(w) > 3]
+    entry = {"title": title[:60], "keywords": words[:10], "date": datetime.now().strftime("%d.%m.%Y %H:%M")}
+    log = _load_topics_log(channel)
+    log.append(entry)
+    _topics_log_path(channel).write_text(json.dumps(log[-50:], ensure_ascii=False), encoding="utf-8")
+
+
+def _similar_to_log(title: str, log: list[dict]) -> bool:
+    tw = _words(title)
+    if not tw:
+        return False
+    for entry in log:
+        overlap = len(tw & set(entry["keywords"])) / max(len(tw), 1)
+        if overlap > 0.35:
+            return True
+    return False
+
+
 def generate(channel: str, slot: str = "default") -> str | None:
     if channel == "ai":
         prompts = PROMPTS_AI
@@ -397,6 +437,18 @@ def generate(channel: str, slot: str = "default") -> str | None:
         prompts = PROMPTS_SCIENCE
         news_query = "наука открытия исследования природа технология"
     prompt = prompts.get(slot, prompts["default"])
+
+    agents = _load_agents()
+    if agents:
+        prompt = "Инструкции для агента:\n" + agents + "\n\n" + prompt
+
+    topics_log = _load_topics_log(channel)
+    if topics_log:
+        prompt += (
+            "\n\nБлокнот тем (уже постили, не повторяй):\n"
+            + "\n".join(f"— {e['title']} ({e['date']})" for e in topics_log[-15:])
+        )
+
     ctx = _history_context(channel)
     if ctx:
         prompt += ctx
@@ -404,21 +456,21 @@ def generate(channel: str, slot: str = "default") -> str | None:
     news = _collect_news(news_query, channel)
     if news:
         prompt += "\n\nДоступные темы (выбери ОДНУ самую интересную):\n" + news
-        prompt += (
-            "\n\nПрежде чем писать пост — коротко объясни (в 1-2 предложения), "
-            "почему ты выбрал именно эту тему: она новая, не повторяется с предыдущими постами, "
-            "актуальна для аудитории. Напиши это объяснение в скобках в начале ответа: [выбор: ...]"
-        )
         if "ранее опубликованные" in news:
             prompt += (
-                "\nТак как это новость из архива — обязательно укажи в посте дату: "
-                "«По данным от [дата]» или «Ещё [месяц назад] писали о...»."
+                "\nТак как это из архива — обязательно укажи дату в посте."
             )
 
     raw = _ask(prompt, max_tokens=4096)
     if not raw:
         return None
     text = raw.strip()
+    i = text.find("[выбор:")
+    if i != -1:
+        j = text.find("]", i)
+        if j != -1:
+            text = text[j + 1:].strip()
+    text = re.sub(r'\[выбор:[^\]]*\]', '', text).strip()
     if text.endswith("--END--"):
         text = text[:-7].strip()
     return text
@@ -751,8 +803,34 @@ def _history_context(channel: str) -> str:
     )
 
 
+def _posted_today(channel: str) -> int:
+    p = HISTORY_DIR / f"posted_{channel}.json"
+    if p.exists():
+        data = json.loads(p.read_text(encoding="utf-8"))
+        today = datetime.now().strftime("%Y-%m-%d")
+        return data.get(today, 0)
+    return 0
+
+
+def _inc_posted(channel: str) -> None:
+    p = HISTORY_DIR / f"posted_{channel}.json"
+    data: dict = {}
+    if p.exists():
+        data = json.loads(p.read_text(encoding="utf-8"))
+    today = datetime.now().strftime("%Y-%m-%d")
+    data[today] = data.get(today, 0) + 1
+    p.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+
+
+MAX_POSTS_PER_DAY = 2
+
+
 def run_once(channel: str, slot: str = "default") -> None:
     log.info("channel=%s slot=%s", channel, slot)
+    posted = _posted_today(channel)
+    if posted >= MAX_POSTS_PER_DAY:
+        log.info("%s already posted %d times today, skip", channel, posted)
+        return
     try:
         text = generate(channel, slot)
         if not text:
@@ -766,9 +844,11 @@ def run_once(channel: str, slot: str = "default") -> None:
         img_raw = _make_image(img_prompt, channel)
         log.info("img_raw: %s", "OK" if img_raw else "NONE")
 
+        _save_topics_log(channel, text)
         _save_history(channel, text)
         tg_r = tg_publish(channel, text, img_raw)
         vk_r = vk_publish(channel, text, img_raw)
+        _inc_posted(channel)
         log.info("%s done: TG=%s VK=%s", channel, tg_r, vk_r)
     except Exception:
         log.exception("run_once failed")
