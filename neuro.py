@@ -12,7 +12,8 @@ import time
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from collections.abc import Callable
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -21,6 +22,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(mes
 log = logging.getLogger("neuro")
 
 CTX = ssl._create_unverified_context()
+_3H = timedelta(hours=3)
 
 FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
@@ -124,7 +126,9 @@ FORMAT = (
     "8. Без хештегов.\n"
     "9. ЗАПРЕЩЕНО использовать символы ** для выделения текста. "
     "Пиши обычным текстом, без Markdown.\n"
-    "10. В конце напиши строку --END-- после текста."
+    "10. ЗАПРЕЩЕНО писать свои рассуждения, выбор темы или объяснения в "
+    "квадратных скобках. Пиши ТОЛЬКО готовый пост.\n"
+    "11. В конце напиши строку --END-- после текста."
 )
 
 PROMPTS_AI = {
@@ -263,34 +267,36 @@ def _random_photo(prompt: str) -> bytes | None:
 
 def _pollinations_image(prompt: str) -> bytes | None:
     q = urllib.parse.quote(prompt[:100])
-    url = f"https://image.pollinations.ai/prompt/{q}?width=1024&height=768&nologo=true&seed=42&safe=false"
-    for attempt in range(2):
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", "Accept": "image/webp,*/*"})
-            with urllib.request.urlopen(req, timeout=60, context=CTX) as r:
-                raw = r.read()
-                if not raw or len(raw) < 1000:
-                    log.warning("Pollinations: too small (%d)", len(raw) if raw else 0)
-                    return None
-                img = Image.open(io.BytesIO(raw))
-                if img.mode != "RGB":
-                    img = img.convert("RGB")
-                buf = io.BytesIO()
-                img.save(buf, format="JPEG", quality=90)
-                result = buf.getvalue()
-                log.info("Pollinations: %d bytes", len(result))
-                return result
-        except urllib.error.HTTPError as e:
-            body = e.read().decode()[:100]
-            if e.code == 402 and attempt == 0:
-                log.info("Pollinations queue full, retrying in 60s...")
-                time.sleep(60)
-                continue
-            log.warning("Pollinations HTTP %d: %s", e.code, body)
-            break
-        except Exception as e:
-            log.warning("Pollinations fail: %s", e)
-            break
+    urls = [
+        f"https://image.pollinations.ai/prompt/{q}?width=1024&height=768&nologo=true&seed={int(time.time())}&safe=false",
+        f"https://image.pollinations.ai/prompt/{q}?width=800&height=600&nologo=true&seed={int(time.time())}&safe=false",
+    ]
+    for url in urls:
+        for attempt in range(2):
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", "Accept": "image/webp,*/*"})
+                with urllib.request.urlopen(req, timeout=90, context=CTX) as r:
+                    raw = r.read()
+                    if not raw or len(raw) < 1000:
+                        log.warning("Pollinations: too small (%d)", len(raw) if raw else 0)
+                        continue
+                    img = Image.open(io.BytesIO(raw))
+                    if img.mode != "RGB":
+                        img = img.convert("RGB")
+                    buf = io.BytesIO()
+                    img.save(buf, format="JPEG", quality=90)
+                    result = buf.getvalue()
+                    log.info("Pollinations: %d bytes from %s", len(result), url[:60])
+                    return result
+            except urllib.error.HTTPError as e:
+                body = e.read().decode()[:100]
+                if e.code == 402 and attempt == 0:
+                    log.info("Pollinations queue full, retrying in 30s...")
+                    time.sleep(30)
+                    continue
+                log.warning("Pollinations HTTP %d: %s", e.code, body)
+            except Exception as e:
+                log.warning("Pollinations fail: %s", e)
     return None
 
 
@@ -389,12 +395,13 @@ def _ask(prompt: str, max_tokens: int = 2048) -> str | None:
     return _openrouter(prompt, max_tokens)
 
 
-AGENTS_PATH = HISTORY_DIR / "AGENTS.md"
+HISTORY_DIR = Path(__file__).parent
 
 
 def _load_agents() -> str:
-    if AGENTS_PATH.exists():
-        return AGENTS_PATH.read_text(encoding="utf-8")
+    p = HISTORY_DIR / "AGENTS.md"
+    if p.exists():
+        return p.read_text(encoding="utf-8")
     return ""
 
 
@@ -409,10 +416,14 @@ def _load_topics_log(channel: str) -> list[dict]:
     return []
 
 
+def _now_msk_str() -> str:
+    return (datetime.utcnow() + _3H).strftime("%d.%m.%Y %H:%M")
+
+
 def _save_topics_log(channel: str, text: str) -> None:
     title = text.split("\n")[0][:80]
     words = [w.lower().strip(",.!?«»\"'()[]-") for w in title.split() if len(w) > 3]
-    entry = {"title": title[:60], "keywords": words[:10], "date": datetime.now().strftime("%d.%m.%Y %H:%M")}
+    entry = {"title": title[:60], "keywords": words[:10], "date": _now_msk_str()}
     log = _load_topics_log(channel)
     log.append(entry)
     _topics_log_path(channel).write_text(json.dumps(log[-50:], ensure_ascii=False), encoding="utf-8")
@@ -427,6 +438,26 @@ def _similar_to_log(title: str, log: list[dict]) -> bool:
         if overlap > 0.35:
             return True
     return False
+
+
+_THOUGHT_RE = re.compile(
+    r"(?:^|\n)\s*\[(?:выбор|рассуждени|анализ|размышлени|thought|reasoning|объяснени|пояснени|заметк)"
+    r":[^\]]*\]\s*(?:\n|$)",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _clean_thoughts(text: str) -> str:
+    text = _THOUGHT_RE.sub("", text)
+    text = re.sub(r'(?:^|\n)\s*\[[^\]]{20,}\]\s*(?:\n|$)', "", text)
+    lines = text.split("\n")
+    cleaned: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped and (stripped.startswith("[") and stripped.endswith("]") and len(stripped) > 30):
+            continue
+        cleaned.append(line)
+    return "\n".join(cleaned).strip()
 
 
 def generate(channel: str, slot: str = "default") -> str | None:
@@ -464,16 +495,10 @@ def generate(channel: str, slot: str = "default") -> str | None:
     raw = _ask(prompt, max_tokens=4096)
     if not raw:
         return None
-    text = raw.strip()
-    i = text.find("[выбор:")
-    if i != -1:
-        j = text.find("]", i)
-        if j != -1:
-            text = text[j + 1:].strip()
-    text = re.sub(r'\[выбор:[^\]]*\]', '', text).strip()
+    text = _clean_thoughts(raw.strip())
     if text.endswith("--END--"):
         text = text[:-7].strip()
-    return text
+    return text.strip()
 
 
 def _generate_image_prompt(post_text: str) -> str:
@@ -511,22 +536,55 @@ def _verify_image(data: bytes | None) -> bytes | None:
         return None
 
 
+def _fallback_image() -> bytes | None:
+    urls = [
+        "https://picsum.photos/1024/768",
+        "https://picsum.photos/800/600",
+        "https://source.unsplash.com/1024x768/?technology,ai",
+    ]
+    for url in urls:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=20, context=CTX) as r:
+                raw = r.read()
+                if raw and len(raw) > 5000:
+                    img = Image.open(io.BytesIO(raw))
+                    if img.mode != "RGB":
+                        img = img.convert("RGB")
+                    buf = io.BytesIO()
+                    img.save(buf, format="JPEG", quality=85)
+                    log.info("Fallback image: %d bytes from %s", len(raw), url[:40])
+                    return buf.getvalue()
+        except Exception as e:
+            log.warning("Fallback fail %s: %s", url[:40], e)
+    return None
+
+
 def _make_image(prompt: str, channel: str = "ai") -> bytes | None:
     log.info("generating image from prompt: %s", prompt[:80])
-    providers = [
-        ("Pollinations", _pollinations_image(prompt)),
-        ("HF", _hf_image(prompt)),
+    providers: list[tuple[str, Callable[[], bytes | None]]] = [
+        ("Pollinations", lambda: _pollinations_image(prompt)),
+        ("HF", lambda: _hf_image(prompt)),
     ]
-    for name, data in providers:
-        if data:
-            verified = _verify_image(data)
-            if verified:
-                log.info("%s image OK (%d bytes)", name, len(verified))
-                return verified
-            log.warning("%s image failed verification", name)
-    log.info("all AI image providers failed, trying random photo")
-    rand = _random_photo(prompt)
-    return _verify_image(rand)
+    for name, fn in providers:
+        log.info("trying %s...", name)
+        try:
+            data = fn()
+            if data:
+                verified = _verify_image(data)
+                if verified:
+                    log.info("%s image OK (%d bytes)", name, len(verified))
+                    return verified
+                log.warning("%s image failed verification", name)
+        except Exception as exc:
+            log.warning("%s image error: %s", name, exc)
+    log.info("all AI image providers failed, trying fallback")
+    try:
+        fb = _fallback_image()
+        return _verify_image(fb)
+    except Exception as exc:
+        log.warning("fallback image error: %s", exc)
+    return None
 
 
 def tg_publish(channel: str, text: str, image_data: bytes | None = None) -> bool:
@@ -674,9 +732,6 @@ def vk_publish(channel: str, text: str, image_data: bytes | None = None) -> bool
     return False
 
 
-HISTORY_DIR = Path(__file__).parent
-
-
 def _history_path(channel: str) -> Path:
     return HISTORY_DIR / f"history_{channel}.json"
 
@@ -803,11 +858,15 @@ def _history_context(channel: str) -> str:
     )
 
 
+def _today_msk() -> str:
+    return (datetime.utcnow() + _3H).strftime("%Y-%m-%d")
+
+
 def _posted_today(channel: str) -> int:
     p = HISTORY_DIR / f"posted_{channel}.json"
     if p.exists():
         data = json.loads(p.read_text(encoding="utf-8"))
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = _today_msk()
         return data.get(today, 0)
     return 0
 
@@ -817,7 +876,7 @@ def _inc_posted(channel: str) -> None:
     data: dict = {}
     if p.exists():
         data = json.loads(p.read_text(encoding="utf-8"))
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = _today_msk()
     data[today] = data.get(today, 0) + 1
     p.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 

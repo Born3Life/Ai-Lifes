@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -29,8 +29,12 @@ SCHEDULE: dict[str, int] = {
 }
 
 
+def _now_msk() -> datetime:
+    return datetime.utcnow() + timedelta(hours=3)
+
+
 def _now_hour() -> int:
-    return datetime.utcnow().hour + 3  # MSK
+    return _now_msk().hour
 
 
 def _load_state() -> dict:
@@ -44,7 +48,7 @@ def _save_state(state: dict) -> None:
 
 
 def _today() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%d")
+    return _now_msk().strftime("%Y-%m-%d")
 
 
 def _should_post(slot: str, state: dict) -> bool:
@@ -81,7 +85,7 @@ def _run_slot(slot: str) -> None:
 
 
 def main() -> None:
-    logger.info("neuro-guide scheduler started")
+    logger.info("scheduler started — times: 9:00, 14:00, 20:00 MSK")
 
     while True:
         hour = _now_hour()
@@ -89,8 +93,11 @@ def main() -> None:
 
         for slot, scheduled_hour in SCHEDULE.items():
             if hour == scheduled_hour and _should_post(slot, state):
+                logger.info("SCHEDULED: %s at %d:00 MSK", slot, hour)
                 _run_slot(slot)
 
+        if hour % 3 == 0:
+            logger.debug("scheduler heartbeat — MSK hour %d", hour)
         time.sleep(60)
 
 

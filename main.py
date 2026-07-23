@@ -121,7 +121,7 @@ def _health_server(port: int) -> None:
 
 
 def _now_hour() -> int:
-    return datetime.utcnow().hour + 3
+    return _now_msk().hour
 
 
 def _load_state() -> dict:
@@ -134,8 +134,13 @@ def _save_state(state: dict) -> None:
     STATE_PATH.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _now_msk() -> datetime:
+    from datetime import timedelta
+    return datetime.utcnow() + timedelta(hours=3)
+
+
 def _today() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%d")
+    return _now_msk().strftime("%Y-%m-%d")
 
 
 def _should_post(channel: str, slot: str, state: dict) -> bool:
@@ -155,16 +160,22 @@ def _mark_posted(channel: str, slot: str, state: dict) -> None:
 
 
 def _scheduler_loop() -> None:
-    logger.info("scheduler started")
+    logger.info("scheduler started — times: AI(12:00, 20:00) Science(10:00, 18:00) MSK")
     while True:
         hour = _now_hour()
         state = _load_state()
         for channel, slots in SCHEDULE.items():
             for slot, scheduled_hour in slots.items():
                 if hour == scheduled_hour and _should_post(channel, slot, state):
-                    logger.info("generating %s/%s post", channel, slot)
-                    neuro_run(channel=channel, slot=slot)
-                    _mark_posted(channel, slot, _load_state())
+                    logger.info("SCHEDULED: %s/%s at %d:00 MSK", channel, slot, hour)
+                    try:
+                        neuro_run(channel=channel, slot=slot)
+                        _mark_posted(channel, slot, _load_state())
+                        logger.info("DONE: %s/%s posted", channel, slot)
+                    except Exception as exc:
+                        logger.error("FAILED: %s/%s — %s", channel, slot, exc)
+        if hour % 3 == 0:
+            logger.debug("scheduler heartbeat — MSK hour %d", hour)
         time.sleep(60)
 
 
