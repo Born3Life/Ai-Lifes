@@ -24,8 +24,6 @@ log = logging.getLogger("neuro")
 CTX = ssl._create_unverified_context()
 _3H = timedelta(hours=3)
 
-FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
-
 _EMOJI_RE = re.compile(
     "["
     "\U0001F600-\U0001F64F"
@@ -81,7 +79,7 @@ def _post(url: str, data: dict, headers: dict | None = None, timeout: int = 60) 
         else:
             log.warning("HTTP %d: %s", e.code, t)
     except Exception as e:
-        log.debug("req error: %s", e)
+        log.warning("req error: %s", e)
     return None
 
 
@@ -154,6 +152,36 @@ PROMPTS_SCIENCE = {
     ),
 }
 
+_EVERGREEN_AI = (
+    "Свежих новостей нет. Выбери ОДНУ из вечных тем ниже и напиши полноценный пост "
+    "(заголовок + 3-4 абзаца, 400-800 символов):\n"
+    "• Туториал: как использовать нейросеть для конкретной задачи (пошаговая инструкция)\n"
+    "• Сравнение двух AI-инструментов для одной задачи (что лучше и почему)\n"
+    "• Топ-5 AI-инструментов для определённой категории (дизайн, код, текст, видео)\n"
+    "• Разбор мифа об ИИ: что правда, а что нет\n"
+    "• Кейс: реальный пример использования нейросетей в работе или жизни\n"
+    "• История создания известной AI-модели или компании\n"
+    "• Что такое [термин из ИИ] простыми словами\n"
+    "• Как нейросети меняют конкретную индустрию\n"
+    "• Подборка полезных промптов для повседневных задач\n"
+    "• Будущее технологии: прогнозы и тренды"
+)
+
+_EVERGREEN_SCIENCE = (
+    "Свежих новостей нет. Выбери ОДНУ из вечных тем ниже и напиши полноценный пост "
+    "(заголовок + 3-4 абзаца, 400-800 символов):\n"
+    "• Как работает конкретное научное явление (объяснение для обычного человека)\n"
+    "• История великого открытия: кто, когда и как сделал\n"
+    "• Краткая биография учёного и его главное открытие\n"
+    "• Почему происходит природное явление (научное объяснение)\n"
+    "• Как технология изменит нашу жизнь через 10 лет\n"
+    "• Что мы знаем о [тема: космос, океан, мозг, генетика]\n"
+    "• Научный метод: как учёные делают открытия\n"
+    "• 5 удивительных научных фактов на одну тему\n"
+    "• Как работает современная технология с точки зрения физики/химии\n"
+    "• Медицинское открытие, которое спасло миллионы жизней"
+)
+
 
 def _parse_rss_date(dt_str: str) -> str:
     try:
@@ -206,6 +234,34 @@ def _fetch_nplus1() -> list[dict]:
 
 def _fetch_marktechpost() -> list[dict]:
     return _fetch_rss("https://www.marktechpost.com/feed/")
+
+
+def _fetch_techcrunch() -> list[dict]:
+    return _fetch_rss("https://techcrunch.com/category/artificial-intelligence/feed/")
+
+
+def _fetch_venturebeat() -> list[dict]:
+    return _fetch_rss("https://venturebeat.com/category/ai/feed/")
+
+
+def _fetch_sciencedaily() -> list[dict]:
+    return _fetch_rss("https://www.sciencedaily.com/rss/all.xml")
+
+
+def _fetch_physorg() -> list[dict]:
+    return _fetch_rss("https://phys.org/rss-feed/")
+
+
+def _fetch_nature() -> list[dict]:
+    return _fetch_rss("https://www.nature.com/nature.rss")
+
+
+def _fetch_newscientist() -> list[dict]:
+    return _fetch_rss("https://www.newscientist.com/feed/home")
+
+
+def _fetch_eurekalert() -> list[dict]:
+    return _fetch_rss("https://www.eurekalert.org/rss/news.xml")
 
 
 def _strip_emojis(text: str) -> str:
@@ -464,9 +520,12 @@ def generate(channel: str, slot: str = "default") -> str | None:
     if channel == "ai":
         prompts = PROMPTS_AI
         news_query = "искусственный интеллект нейросети ChatGPT новости"
+        evergreen = _EVERGREEN_AI
     else:
         prompts = PROMPTS_SCIENCE
         news_query = "наука открытия исследования природа технология"
+        evergreen = _EVERGREEN_SCIENCE
+
     prompt = prompts.get(slot, prompts["default"])
 
     agents = _load_agents()
@@ -491,14 +550,33 @@ def generate(channel: str, slot: str = "default") -> str | None:
             prompt += (
                 "\nТак как это из архива — обязательно укажи дату в посте."
             )
+    else:
+        prompt += "\n\n" + evergreen
 
-    raw = _ask(prompt, max_tokens=4096)
-    if not raw:
-        return None
-    text = _clean_thoughts(raw.strip())
-    if text.endswith("--END--"):
-        text = text[:-7].strip()
-    return text.strip()
+    for attempt in range(3):
+        raw = _ask(prompt, max_tokens=4096)
+        if not raw:
+            return None
+        text = _clean_thoughts(raw.strip())
+        if text.endswith("--END--"):
+            text = text[:-7].strip()
+        text = text.strip()
+        if not text:
+            continue
+
+        title = text.split("\n")[0]
+        if _similar_to_log(title, topics_log):
+            log.warning("duplicate topic (attempt %d): %s…", attempt + 1, title[:50])
+            prompt += (
+                "\n\nПРЕДУПРЕЖДЕНИЕ: предыдущий ответ повторяет "
+                "уже использованную тему. Выбери ДРУГУЮ тему. Не пиши про это."
+            )
+            continue
+
+        return text
+
+    log.error("all 3 attempts failed — duplicate topics")
+    return None
 
 
 def _generate_image_prompt(post_text: str) -> str:
@@ -816,14 +894,25 @@ def _collect_news(news_query: str, channel: str) -> str:
     ]
 
     if channel == "ai":
-        sources.append(("Habr AI", _fetch_habr("artificial_intelligence")))
-        sources.append(("Habr ML", _fetch_habr("machine_learning")))
-        sources.append(("Habr DL", _fetch_habr("deep_learning")))
-        sources.append(("MarkTechPost", _fetch_marktechpost()))
+        sources.extend([
+            ("Habr AI", _fetch_habr("artificial_intelligence")),
+            ("Habr ML", _fetch_habr("machine_learning")),
+            ("Habr DL", _fetch_habr("deep_learning")),
+            ("MarkTechPost", _fetch_marktechpost()),
+            ("TechCrunch AI", _fetch_techcrunch()),
+            ("VentureBeat AI", _fetch_venturebeat()),
+        ])
     else:
-        sources.append(("Habr Science", _fetch_habr("science")))
-        sources.append(("TASS", _fetch_tass()))
-        sources.append(("N+1", _fetch_nplus1()))
+        sources.extend([
+            ("Habr Science", _fetch_habr("science")),
+            ("TASS", _fetch_tass()),
+            ("N+1", _fetch_nplus1()),
+            ("ScienceDaily", _fetch_sciencedaily()),
+            ("Phys.org", _fetch_physorg()),
+            ("Nature", _fetch_nature()),
+            ("New Scientist", _fetch_newscientist()),
+            ("EurekAlert", _fetch_eurekalert()),
+        ])
 
     used = _load_used_rss(channel)
     fresh: list[dict] = []

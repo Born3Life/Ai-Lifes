@@ -1,12 +1,8 @@
 name: Post AI
 on:
   schedule:
-    - cron: "0 22 * * *"
-    - cron: "0 2 * * *"
-    - cron: "0 6 * * *"
-    - cron: "0 10 * * *"
-    - cron: "0 14 * * *"
-    - cron: "0 18 * * *"
+    - cron: "0 7 * * *"
+    - cron: "0 17 * * *"
   workflow_dispatch:
 
 jobs:
@@ -23,8 +19,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/cache@v4
         with:
-          path: history_ai.json
-          key: neuro-history-ai
+          path: |
+            history_ai.json
+            posted_ai.json
+            topics_log_ai.json
+            used_rss_ai.json
+            rss_archive_ai.json
+          key: neuro-state-ai
           save-always: true
       - uses: actions/setup-python@v5
         with:

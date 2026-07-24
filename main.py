@@ -26,12 +26,12 @@ STATE_PATH = Path(__file__).parent / "state.json"
 
 SCHEDULE: dict[str, dict[str, int]] = {
     "ai": {
-        "afternoon": 12,
+        "morning": 10,
         "evening": 20,
     },
     "science": {
-        "morning": 10,
-        "evening": 18,
+        "day": 12,
+        "evening": 22,
     },
 }
 
@@ -70,11 +70,15 @@ class TriggerHandler(BaseHTTPRequestHandler):
             self._respond(200, "ok\n")
         elif path == "/trigger/ai":
             self._respond(200, "started\n")
-            t = threading.Thread(target=neuro_run, args=("ai", "afternoon"), daemon=True)
+            hour = _now_hour()
+            slot = "morning" if hour < 15 else "evening"
+            t = threading.Thread(target=neuro_run, args=("ai", slot), daemon=True)
             t.start()
         elif path == "/trigger/science":
             self._respond(200, "started\n")
-            t = threading.Thread(target=neuro_run, args=("science", "afternoon"), daemon=True)
+            hour = _now_hour()
+            slot = "day" if hour < 17 else "evening"
+            t = threading.Thread(target=neuro_run, args=("science", slot), daemon=True)
             t.start()
         elif path == "/vk-auth":
             self.send_response(200)
@@ -85,7 +89,9 @@ class TriggerHandler(BaseHTTPRequestHandler):
             code = urllib.parse.parse_qs(path.split("?", 1)[1] if "?" in path else "").get("code", [""])[0]
             if not code:
                 self._respond(400, "no code\n"); return
-            secret = os.environ.get("VK_CLIENT_SECRET", "iWTVKhquRjJN1OVWYlPJ")
+            secret = os.environ.get("VK_CLIENT_SECRET")
+            if not secret:
+                self._respond(500, "VK_CLIENT_SECRET not set\n"); return
             data = urllib.parse.urlencode({
                 "client_id": 54686016, "client_secret": secret,
                 "redirect_uri": "https://ai-lifes-bot.onrender.com/vk-auth",
@@ -160,7 +166,7 @@ def _mark_posted(channel: str, slot: str, state: dict) -> None:
 
 
 def _scheduler_loop() -> None:
-    logger.info("scheduler started — times: AI(12:00, 20:00) Science(10:00, 18:00) MSK")
+    logger.info("scheduler started — times: AI(10:00, 20:00) Science(12:00, 22:00) MSK")
     while True:
         hour = _now_hour()
         state = _load_state()
@@ -174,8 +180,8 @@ def _scheduler_loop() -> None:
                         logger.info("DONE: %s/%s posted", channel, slot)
                     except Exception as exc:
                         logger.error("FAILED: %s/%s — %s", channel, slot, exc)
-        if hour % 3 == 0:
-            logger.debug("scheduler heartbeat — MSK hour %d", hour)
+        if hour % 6 == 0:
+            logger.info("scheduler heartbeat — MSK hour %d", hour)
         time.sleep(60)
 
 
